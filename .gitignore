@@ -1,5 +1,23 @@
-# Compiled
+# Emacs specific files
 *.elc
+*.el.gz
+*~
+\#*\#
+/.emacs.desktop
+/.emacs.desktop.lock
+*.elc
+*.elc.*
+auto-save-list
+tramp
+.\#*
+
+# Emacs package development
+elpa/
+packages/
+*.tar
+*.tar.gz
+*.tar.bz2
+*.zip
 
 # Packaging
 .cask/
@@ -7,11 +25,86 @@
 .eldev/
 .keg/
 
-# Built distribution
-dist/
-
-# Backup files
-*~
-
 # Undo-tree save-files
 *.~undo-tree
+
+# Eglot and LSP related
+.lsp-session.json
+.lsp-session-v1.json
+
+# OS specific files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# IDE/Editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Backup files
+*.bak
+*.backup
+*.old
+*.orig
+*.rej
+
+# Log files
+*.log
+logs/
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+*.temp
+
+# Build artifacts
+build/
+dist/
+*.build
+
+# Documentation build
+docs/_build/
+docs/.doctrees/
+
+# Test coverage
+coverage/
+.coverage
+.nyc_output
+
+# Package managers
+node_modules/
+.npm/
+.yarn/
+
+# Python (if any Python tools are used)
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# Configuration files (keep templates)
+config.local.*
+.env
+.env.local
+.env.*.local
+
+# Git
+.git
+.gitignore
+
+# Project specific
+# Add any project-specific ignore patterns here
