@@ -2,8 +2,13 @@
 
 CodeLens support for Eglot, displaying LSP CodeLens information as overlays above code.
 
+## Screenshot
+
+![Screenshot](https://raw.githubusercontent.com/zsxh/eglot-codelens/refs/heads/imgs/screenshot.webp)
+
 ## Features
 
+- impl `textDocument/codeLens`, `codeLens/resolve`
 - Display CodeLens information as overlays above code
 - Support mouse clicks and keyboard interaction
 - Integration with Eglot
