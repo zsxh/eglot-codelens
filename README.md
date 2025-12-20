@@ -60,6 +60,13 @@ M-x eglot-codelens-execute-at-line
 (setq eglot-codelens-update-delay 0.3)
 ```
 
+## TODOs
+
+- [ ] auto resolve codelens
+  - [ ] in viewport
+  - [ ] on scroll change
+  - [ ] on window layout change
+
 ## License
 
 GPLv3

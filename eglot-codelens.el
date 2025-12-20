@@ -93,11 +93,14 @@ Each element is a plist representing a CodeLens object:
 
 ;;; LSP Protocol Handlers
 
-(defun eglot-codelens--fetch-codelens ()
-  "Fetch CodeLens for current buffer."
-  (eglot--request (eglot--current-server-or-lose)
-                  :textDocument/codeLens
-                  (list :textDocument (eglot--TextDocumentIdentifier))))
+(defun eglot-codelens--fetch-codelens (cb)
+  "Fetch CodeLens for current buffer with Callback CB."
+  (let* ((method :textDocument/codeLens)
+         (params (list :textDocument (eglot--TextDocumentIdentifier))))
+    (eglot--async-request
+     (eglot--current-server-or-lose) method params
+     :success-fn cb
+     :hint method)))
 
 (defun eglot-codelens--resolve-codelens (codelens)
   "Resolve CODELENS details."
@@ -336,14 +339,15 @@ If there are multiple, show a selection menu for user to choose."
 
 (defun eglot-codelens--update-buffer ()
   "Update CodeLens display in current buffer."
-  (when-let* ((current-version eglot--versioned-identifier)
-              ((not (equal eglot-codelens--version current-version))))
-
-    ;; Fetch and render CodeLens
-    (when-let* ((codelens-list (eglot-codelens--fetch-codelens)))
-      (setq eglot-codelens--cache codelens-list
-            eglot-codelens--version current-version)
-      (eglot-codelens--render-codelens codelens-list))))
+  (let* ((docver eglot--versioned-identifier)
+         (buf (current-buffer)))
+    (eglot-codelens--fetch-codelens
+     (lambda (codelens-list)
+       (eglot--when-live-buffer buf
+         (when (eq docver eglot--versioned-identifier)
+           (setq eglot-codelens--cache codelens-list
+                 eglot-codelens--version docver)
+           (eglot-codelens--render-codelens codelens-list)))))))
 
 ;;; Minor Mode Definition
 
