@@ -251,12 +251,11 @@ If the icon is not recognized, returns the original placeholder."
   "Resolve CODELENS and then update overlay OV."
   (if-let* ((resolved (eglot-codelens--resolve-codelens codelens)))
       (progn
-        ;; Update cache with resolved codelens - more efficient approach
-        (let ((cache-index (cl-position codelens eglot-codelens--cache)))
-          (when cache-index
-            (aset eglot-codelens--cache cache-index resolved)))
+        ;; Update cache with resolved codelens
+        (cl-remf codelens :data)
+        (plist-put codelens :command (plist-get resolved :command))
         ;; Update only the specific overlay
-        (eglot-codelens--update-single-overlay resolved ov))
+        (eglot-codelens--update-single-overlay codelens ov))
     (message "Failed to resolve CodeLens command")))
 
 (defun eglot-codelens-execute-at-line ()
