@@ -99,13 +99,13 @@ where CODELENS-OVERLAY-CELL is (CODELENS . OVERLAY)."
                for line = (1+ (plist-get (plist-get range :start) :line))
                do (push (cons codelens nil) (gethash line line-groups)))
 
-      ;; Convert hash table to sorted list format
+      ;; Convert hash table to list format
       (let ((result nil))
         (maphash (lambda (line codelens-on-line)
                    (push (cons line (nreverse codelens-on-line))
                          result))
                  line-groups)
-        (nreverse result)))))
+        result))))
 
 ;;; LSP Protocol Handlers
 
