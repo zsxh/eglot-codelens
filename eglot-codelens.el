@@ -76,20 +76,36 @@
 
 ;;; Core Data Structures and Cache Management
 
-(defvar-local eglot-codelens--cache nil
-  "Cache for raw LSP CodeLens objects in current buffer.
-Each element is a plist representing a CodeLens object:
-(:range ((start . ((line . 10) (character . 0)))
-         (end . ((line . 10) (character . 20))))
- :command ((title . \"3 references\") ...)
- :data (...))")
+(defvar-local eglot-codelens--line-cache nil
+  "Cache for CodeLens objects grouped by line in current buffer.
+Each element is a cons cell (LINENUM . (CODELENS-OVERLAY-CELL ...))
+where CODELENS-OVERLAY-CELL is (CODELENS . OVERLAY).")
 
 (defvar-local eglot-codelens--version nil
   "Document version for cached CodeLens.")
 
-
 (defvar-local eglot-codelens--update-timer nil
   "Timer for delayed CodeLens updates.")
+
+(defun eglot-codelens--build-line-cache (codelens-list)
+  "Build line cache from CODELENS-LIST.
+Returns a list of cons cells (LINENUM . (CODELENS-OVERLAY-CELL ...))
+where CODELENS-OVERLAY-CELL is (CODELENS . OVERLAY)."
+  (when codelens-list
+    (let ((line-groups (make-hash-table :test 'equal)))
+      ;; Group CodeLens by line number
+      (cl-loop for codelens across codelens-list
+               for range = (plist-get codelens :range)
+               for line = (1+ (plist-get (plist-get range :start) :line))
+               do (push (cons codelens nil) (gethash line line-groups)))
+
+      ;; Convert hash table to sorted list format
+      (let ((result nil))
+        (maphash (lambda (line codelens-on-line)
+                   (push (cons line (nreverse codelens-on-line))
+                         result))
+                 line-groups)
+        (nreverse result)))))
 
 ;;; LSP Protocol Handlers
 
@@ -111,8 +127,8 @@ Each element is a plist representing a CodeLens object:
 
 ;;; UI Display System
 
-(defun eglot-codelens--build-display-string (ov codelens line-start index total-codelens)
-  "Build display string for CODELENS overlay OV at LINE-START with INDEX and TOTAL-CODELENS."
+(defun eglot-codelens--build-display-string (codelens-cell codelens line-start index total-codelens)
+  "Build display string for CODELENS in CODELENS-CELL at LINE-START with INDEX and TOTAL-CODELENS."
   (let* ((is-first (= index 0))
          (is-last (= index (1- total-codelens)))
          (indentation (if is-first
@@ -130,23 +146,26 @@ Each element is a plist representing a CodeLens object:
                  'keymap (let ((map (make-sparse-keymap)))
                            (define-key map [mouse-1]
                              (lambda () (interactive)
-                               (eglot-codelens-execute-or-resolve ov)))
+                               (eglot-codelens-execute-or-resolve codelens-cell)))
                            map))
      separator)))
 
-(defun eglot-codelens--make-overlay (line-start codelens index total-codelens)
-  "Create overlay for CODELENS at LINE-START with INDEX and TOTAL-CODELENS count."
-  (let ((ov (make-overlay line-start line-start)))
+(defun eglot-codelens--make-overlay (line-start codelens-cell index total-codelens)
+  "Create overlay for CODELENS-CELL at LINE-START with INDEX and TOTAL-CODELENS count.
+CODELENS-CELL is a cons cell (CODELENS . OVERLAY).
+Returns the created overlay."
+  (let* ((codelens (car codelens-cell))
+         (ov (make-overlay line-start line-start)))
     ;; Priority increases: 0, 1, 2... matching LSP return order
     (overlay-put ov 'priority index)
 
     ;; Add identification for cleanup and store data
-    (overlay-put ov 'eglot-codelens codelens)
+    (overlay-put ov 'eglot-codelens t)
 
     ;; Set display string
     (overlay-put ov 'before-string
                  (eglot-codelens--build-display-string
-                  ov codelens line-start index total-codelens))
+                  codelens-cell codelens line-start index total-codelens))
     ov))
 
 (defun eglot-codelens--codicons-to-nerd-icons (title)
@@ -190,98 +209,101 @@ If the icon is not recognized, returns the original placeholder."
     (when (overlay-get ov 'eglot-codelens)
       (delete-overlay ov))))
 
-(defun eglot-codelens--update-single-overlay (new-codelens ov)
-  "Update overlay OV with NEW-CODELENS data."
-  ;; Calculate total CodeLens on the same line - only check overlays at this line position
-  (let* ((line-start (overlay-start ov))
-         (line-end (line-end-position (line-number-at-pos line-start)))
-         (codelens-on-line (cl-loop for ov in (overlays-in line-start line-end)
-                                    when (and (overlay-get ov 'eglot-codelens)
-                                              (= (overlay-start ov) line-start))
-                                    collect (overlay-get ov 'eglot-codelens)))
-         (total-on-line (length codelens-on-line)))
+(defun eglot-codelens--update-single-overlay (codelens-cell)
+  "Update overlay in CODELENS-CELL with resolved CodeLens data.
+CODELENS-CELL is a cons cell (CODELENS . OVERLAY)."
+  ;; Get line number from overlay position
+  (let* ((codelens (car codelens-cell))
+         (ov (cdr codelens-cell))
+         (line-start (overlay-start ov))
+         (line (line-number-at-pos line-start))
+         ;; Find line group in cache
+         (line-group (cl-find-if (lambda (group)
+                                   (= (car group) line))
+                                 eglot-codelens--line-cache))
+         (total-on-line (if line-group
+                            (length (cdr line-group))
+                          1)))
     ;; Update the display string using the common function
     (overlay-put ov 'before-string
                  (eglot-codelens--build-display-string
-                  ov
-                  new-codelens
+                  codelens-cell
+                  codelens
                   line-start
                   (overlay-get ov 'priority)
                   total-on-line))))
 
-(defun eglot-codelens--render-codelens (codelens-list)
-  "Render CODELENS-LIST in current buffer."
+(defun eglot-codelens--render-codelens ()
+  "Render CodeLens in current buffer using the optimized line cache."
   (eglot-codelens--cleanup-overlays)
 
-  (when codelens-list
+  (when eglot-codelens--line-cache
     (with-silent-modifications
       (save-excursion
-        ;; Group CodeLens by line
-        (let ((line-groups (make-hash-table :test 'equal)))
-          ;; First pass: group CodeLens by line number
-          (cl-loop for codelens across codelens-list
-                   for range = (plist-get codelens :range)
-                   for line = (1+ (plist-get (plist-get range :start) :line))
-                   do (push codelens (gethash line line-groups)))
-
-          ;; Second pass: render each line's CodeLens
-          (maphash (lambda (line codelens-on-line)
-                     (let* ((sorted-codelens (nreverse codelens-on-line))
-                            (line-start (progn
-                                          (goto-char (point-min))
-                                          (forward-line (1- line))
-                                          (line-beginning-position)))
-                            (total-on-line (length sorted-codelens)))
-                       (cl-loop for codelens in sorted-codelens
-                                for index from 0
-                                do (eglot-codelens--make-overlay line-start codelens index total-on-line))))
-                   line-groups))))))
+        ;; Use pre-computed line cache instead of regrouping
+        (dolist (line-group eglot-codelens--line-cache)
+          (let* ((line (car line-group))
+                 (sorted-codelens (cdr line-group))
+                 (line-start (progn
+                               (goto-char (point-min))
+                               (forward-line (1- line))
+                               (line-beginning-position)))
+                 (total-on-line (length sorted-codelens)))
+            (cl-loop for codelens-cell in sorted-codelens
+                     for index from 0
+                     for ov = (eglot-codelens--make-overlay line-start codelens-cell index total-on-line)
+                     do (setcdr codelens-cell ov))))))))
 
 ;;; Interaction Handling
-(defun eglot-codelens-execute-or-resolve (ov)
-  "Execute CodeLens command or resolve CodeLens at overlay OV."
-  (if-let* ((codelens (overlay-get ov 'eglot-codelens))
-            (command (plist-get codelens :command)))
-      ;; Execute resolved command
-      (eglot-execute (eglot--current-server-or-lose) command)
-    ;; Resolve command and update overlay
-    (eglot-codelens--resolve-and-update codelens ov)))
+(defun eglot-codelens-execute-or-resolve (codelens-cell)
+  "Execute CodeLens command or resolve CodeLens in CODELENS-CELL.
+CODELENS-CELL is a cons cell (CODELENS . OVERLAY)."
+  (let* ((codelens (car codelens-cell))
+         (command (plist-get codelens :command)))
+    (if command
+        ;; Execute resolved command
+        (eglot-execute (eglot--current-server-or-lose) command)
+      ;; Resolve command and update overlay
+      (eglot-codelens--resolve-and-update codelens-cell))))
 
-(defun eglot-codelens--resolve-and-update (codelens ov)
-  "Resolve CODELENS and then update overlay OV."
-  (if-let* ((resolved (eglot-codelens--resolve-codelens codelens)))
-      (progn
-        ;; Update cache with resolved codelens
-        (cl-remf codelens :data)
-        (plist-put codelens :command (plist-get resolved :command))
-        ;; Update only the specific overlay
-        (eglot-codelens--update-single-overlay codelens ov))
-    (message "Failed to resolve CodeLens command")))
+(defun eglot-codelens--resolve-and-update (codelens-cell)
+  "Resolve CODELENS in CODELENS-CELL and update its overlay.
+CODELENS-CELL is a cons cell (CODELENS . OVERLAY)."
+  (let* ((codelens (car codelens-cell)))
+    (if-let* ((resolved (eglot-codelens--resolve-codelens codelens)))
+        (progn
+          ;; Update cache with resolved codelens
+          (cl-remf codelens :data)
+          (plist-put codelens :command (plist-get resolved :command))
+          ;; Update only the specific overlay
+          (eglot-codelens--update-single-overlay codelens-cell))
+      (message "Failed to resolve CodeLens command"))))
 
 (defun eglot-codelens-execute-at-line ()
   "Execute CodeLens at current line.
 If there's only one CodeLens, execute it directly.
 If there are multiple, show a selection menu for user to choose."
   (interactive)
-  (if-let* ((ovs (cl-loop for ov in (overlays-in (line-beginning-position) (line-end-position))
-                          when (overlay-get ov 'eglot-codelens)
-                          collect ov)))
-      (if (= (length ovs) 1)
-          ;; Only one CodeLens, execute directly
-          (eglot-codelens-execute-or-resolve (car ovs))
-        ;; Multiple CodeLens, sort by priority and show selection menu
-        (let* ((sorted-ovs (sort ovs (lambda (a b)
-                                      (< (overlay-get a 'priority)
-                                         (overlay-get b 'priority)))))
-               (choices (cl-loop for ov in sorted-ovs
-                                for priority = (overlay-get ov 'priority)
-                                for codelens = (overlay-get ov 'eglot-codelens)
-                                collect (cons (format "[%d] %s" priority (eglot-codelens--format-text codelens)) ov)))
-               (vertico-sort-function nil) ;; No sorting if using vertico
-               (selected-ov (cdr (assoc (completing-read "Select CodeLens: " choices) choices))))
-          (when selected-ov
-            (eglot-codelens-execute-or-resolve selected-ov))))
-    (message "No CodeLens found at this line.")))
+  (let* ((line (line-number-at-pos))
+         (line-group (cl-find-if (lambda (group)
+                                   (= (car group) line))
+                                 eglot-codelens--line-cache)))
+    (if-let* ((sorted-codelens (and line-group
+                                    (cdr line-group))))
+        (if (= (length sorted-codelens) 1)
+            ;; Only one CodeLens, execute it directly from cache
+            (eglot-codelens-execute-or-resolve (car sorted-codelens))
+          ;; Multiple CodeLens, show selection menu using cached sorted list
+          (let* ((choices (cl-loop for codelens-cell in sorted-codelens
+                                   for index from 0
+                                   for codelens = (car codelens-cell)
+                                   collect (cons (format "[%d] %s" index (eglot-codelens--format-text codelens))
+                                                 codelens-cell)))
+                 (vertico-sort-function nil) ;; No sorting if using vertico
+                 (selected-cell (cdr (assoc (completing-read "Select CodeLens: " choices) choices))))
+            (when selected-cell
+              (eglot-codelens-execute-or-resolve selected-cell))))
+      (message "No CodeLens found at this line."))))
 
 ;;; Eglot Integration
 
@@ -293,7 +315,7 @@ If there are multiple, show a selection menu for user to choose."
   "Setup CodeLens for current buffer."
   (when eglot-codelens-mode
     ;; Initialize buffer-local variables
-    (setq eglot-codelens--cache nil
+    (setq eglot-codelens--line-cache nil
           eglot-codelens--version nil)
     ;; Add Eglot document change hook
     (add-hook 'eglot--document-changed-hook #'eglot-codelens--on-document-change nil t)))
@@ -309,7 +331,7 @@ If there are multiple, show a selection menu for user to choose."
   (eglot-codelens--cleanup-overlays)
 
   ;; Clear cache and version
-  (setq eglot-codelens--cache nil
+  (setq eglot-codelens--line-cache nil
         eglot-codelens--version nil)
 
   ;; Remove Eglot document change hook
@@ -344,9 +366,9 @@ If there are multiple, show a selection menu for user to choose."
      (lambda (codelens-list)
        (eglot--when-live-buffer buf
          (when (eq docver eglot--versioned-identifier)
-           (setq eglot-codelens--cache codelens-list
+           (setq eglot-codelens--line-cache (eglot-codelens--build-line-cache codelens-list)
                  eglot-codelens--version docver)
-           (eglot-codelens--render-codelens codelens-list)))))))
+           (eglot-codelens--render-codelens)))))))
 
 ;;; Minor Mode Definition
 
