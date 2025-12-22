@@ -92,7 +92,7 @@ where CODELENS-OVERLAY-CELL is (CODELENS . OVERLAY).")
 Returns a list of cons cells (LINENUM . (CODELENS-OVERLAY-CELL ...))
 where CODELENS-OVERLAY-CELL is (CODELENS . OVERLAY)."
   (when codelens-list
-    (let ((line-groups (make-hash-table :test 'equal)))
+    (let ((line-groups (make-hash-table :test 'eq)))
       ;; Group CodeLens by line number
       (cl-loop for codelens across codelens-list
                for range = (plist-get codelens :range)
