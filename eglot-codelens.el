@@ -76,7 +76,7 @@
 
 ;;; Core Data Structures and Cache Management
 
-(defvar-local eglot-codelens--line-cache nil
+(defvar-local eglot-codelens--cache nil
   "Cache for CodeLens objects grouped by line in current buffer.
 Each element is a cons cell (LINENUM . (CODELENS-OVERLAY-CELL ...))
 where CODELENS-OVERLAY-CELL is (CODELENS . OVERLAY).")
@@ -220,7 +220,7 @@ CODELENS-CELL is a cons cell (CODELENS . OVERLAY)."
          ;; Find line group in cache
          (line-group (cl-find-if (lambda (group)
                                    (= (car group) line))
-                                 eglot-codelens--line-cache))
+                                 eglot-codelens--cache))
          (total-on-line (if line-group
                             (length (cdr line-group))
                           1)))
@@ -237,11 +237,11 @@ CODELENS-CELL is a cons cell (CODELENS . OVERLAY)."
   "Render CodeLens in current buffer using the optimized line cache."
   (eglot-codelens--cleanup-overlays)
 
-  (when eglot-codelens--line-cache
+  (when eglot-codelens--cache
     (with-silent-modifications
       (save-excursion
         ;; Use pre-computed line cache instead of regrouping
-        (dolist (line-group eglot-codelens--line-cache)
+        (dolist (line-group eglot-codelens--cache)
           (let* ((line (car line-group))
                  (sorted-codelens (cdr line-group))
                  (line-start (progn
@@ -287,7 +287,7 @@ If there are multiple, show a selection menu for user to choose."
   (let* ((line (line-number-at-pos))
          (line-group (cl-find-if (lambda (group)
                                    (= (car group) line))
-                                 eglot-codelens--line-cache)))
+                                 eglot-codelens--cache)))
     (if-let* ((sorted-codelens (and line-group
                                     (cdr line-group))))
         (if (= (length sorted-codelens) 1)
@@ -315,7 +315,7 @@ If there are multiple, show a selection menu for user to choose."
   "Setup CodeLens for current buffer."
   (when eglot-codelens-mode
     ;; Initialize buffer-local variables
-    (setq eglot-codelens--line-cache nil
+    (setq eglot-codelens--cache nil
           eglot-codelens--version nil)
     ;; Add Eglot document change hook
     (add-hook 'eglot--document-changed-hook #'eglot-codelens--on-document-change nil t)))
@@ -331,7 +331,7 @@ If there are multiple, show a selection menu for user to choose."
   (eglot-codelens--cleanup-overlays)
 
   ;; Clear cache and version
-  (setq eglot-codelens--line-cache nil
+  (setq eglot-codelens--cache nil
         eglot-codelens--version nil)
 
   ;; Remove Eglot document change hook
@@ -366,7 +366,7 @@ If there are multiple, show a selection menu for user to choose."
      (lambda (codelens-list)
        (eglot--when-live-buffer buf
          (when (eq docver eglot--versioned-identifier)
-           (setq eglot-codelens--line-cache (eglot-codelens--build-line-cache codelens-list)
+           (setq eglot-codelens--cache (eglot-codelens--build-line-cache codelens-list)
                  eglot-codelens--version docver)
            (eglot-codelens--render-codelens)))))))
 
