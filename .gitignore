@@ -108,3 +108,4 @@ config.local.*
 
 # Project specific
 # Add any project-specific ignore patterns here
+/.agent-shell/
