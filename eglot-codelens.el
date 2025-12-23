@@ -62,8 +62,8 @@
   :type 'float
   :group 'eglot-codelens)
 
-(defcustom eglot-codelens-refresh-delay 0.25
-  "Delay in seconds before refreshing CodeLens after window scroll."
+(defcustom eglot-codelens-visible-refresh-delay 0.25
+  "Delay in seconds before refreshing visible CodeLens after window changes."
   :type 'float
   :group 'eglot-codelens)
 
@@ -92,8 +92,8 @@ where CODELENS-OVERLAY-CELL is (CODELENS . OVERLAY).")
 (defvar-local eglot-codelens--update-timer nil
   "Timer for delayed CodeLens updates.")
 
-(defvar-local eglot-codelens--scroll-timer nil
-  "Timer for delayed CodeLens refresh on window scroll.")
+(defvar-local eglot-codelens--refresh-timer nil
+  "Timer for delayed CodeLens refresh on window visible changes.")
 
 (defvar-local eglot-codelens--updating nil
   "Non-nil when eglot-codelens--update-buffer is in progress.")
@@ -388,7 +388,9 @@ If there are multiple, show a selection menu for user to choose."
     ;; Add Eglot document change hook
     (add-hook 'eglot--document-changed-hook #'eglot-codelens--on-document-change nil t)
     ;; Add window scroll hook for visible area refresh
-    (add-hook 'window-scroll-functions #'eglot-codelens--on-window-scroll nil t)))
+    (add-hook 'window-scroll-functions #'eglot-codelens--schedule-visible-refresh nil t)
+    ;; Add window configuration change hook
+    (add-hook 'window-configuration-change-hook #'eglot-codelens--schedule-visible-refresh nil t)))
 
 (defun eglot-codelens--cleanup-buffer ()
   "Cleanup CodeLens for current buffer."
@@ -396,10 +398,10 @@ If there are multiple, show a selection menu for user to choose."
   (when eglot-codelens--update-timer
     (cancel-timer eglot-codelens--update-timer)
     (setq eglot-codelens--update-timer nil))
-  ;; Cancel any pending scroll timer
-  (when eglot-codelens--scroll-timer
-    (cancel-timer eglot-codelens--scroll-timer)
-    (setq eglot-codelens--scroll-timer nil))
+  ;; Cancel any pending refresh timer
+  (when eglot-codelens--refresh-timer
+    (cancel-timer eglot-codelens--refresh-timer)
+    (setq eglot-codelens--refresh-timer nil))
 
   ;; Remove all overlays
   (eglot-codelens--cleanup-overlays)
@@ -412,25 +414,27 @@ If there are multiple, show a selection menu for user to choose."
   ;; Remove Eglot document change hook
   (remove-hook 'eglot--document-changed-hook #'eglot-codelens--on-document-change t)
   ;; Remove window scroll hook
-  (remove-hook 'window-scroll-functions #'eglot-codelens--on-window-scroll t))
+  (remove-hook 'window-scroll-functions #'eglot-codelens--schedule-visible-refresh t)
+  ;; Remove window configuration change hook
+  (remove-hook 'window-configuration-change-hook #'eglot-codelens--schedule-visible-refresh t))
 
-(defun eglot-codelens--on-window-scroll (&rest _args)
+(defun eglot-codelens--schedule-visible-refresh (&rest _args)
   "Handle window scroll/resize to refresh visible CodeLens with debouncing."
   (when eglot-codelens-mode
     ;; If there's already a timer, just reset its time
-    (if (timerp eglot-codelens--scroll-timer)
+    (if (timerp eglot-codelens--refresh-timer)
         ;; Reset existing timer's time
-        (timer-set-idle-time eglot-codelens--scroll-timer eglot-codelens-refresh-delay)
+        (timer-set-idle-time eglot-codelens--refresh-timer eglot-codelens-visible-refresh-delay)
       ;; Create new timer if none exists
-      (setq eglot-codelens--scroll-timer
+      (setq eglot-codelens--refresh-timer
             (run-with-idle-timer
-             eglot-codelens-refresh-delay nil
+             eglot-codelens-visible-refresh-delay nil
              (lambda (buf)
                (when (buffer-live-p buf)
                  (with-current-buffer buf
-                   (when (timerp eglot-codelens--scroll-timer)
-                     (cancel-timer eglot-codelens--scroll-timer))
-                   (setq eglot-codelens--scroll-timer nil)
+                   (when (timerp eglot-codelens--refresh-timer)
+                     (cancel-timer eglot-codelens--refresh-timer))
+                   (setq eglot-codelens--refresh-timer nil)
                    (when (eq (current-buffer) (window-buffer (selected-window)))
                      (eglot-codelens--refresh-buffer)))))
              (current-buffer))))))
