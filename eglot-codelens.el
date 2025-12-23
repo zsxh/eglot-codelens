@@ -84,9 +84,6 @@ where CODELENS-OVERLAY-CELL is (CODELENS . OVERLAY).")
 (defvar-local eglot-codelens--version nil
   "Document version for cached CodeLens.")
 
-(defvar-local eglot-codelens--line-count nil
-  "Line count of buffer when CodeLens was last updated.")
-
 (defvar-local eglot-codelens--update-timer nil
   "Timer for delayed CodeLens updates.")
 
@@ -155,9 +152,10 @@ CODELENS-CELL is a cons cell (CODELENS . OVERLAY)."
                            map))
      separator)))
 
-(defun eglot-codelens--make-overlay (line-start codelens-cell index total-codelens)
+(defun eglot-codelens--make-overlay (line-start codelens-cell index total-codelens docver)
   "Create overlay for CODELENS-CELL at LINE-START with INDEX and TOTAL-CODELENS count.
 CODELENS-CELL is a cons cell (CODELENS . OVERLAY).
+DOCVER is the document version for tracking overlay validity.
 Returns the created overlay."
   (let* ((ov (make-overlay line-start line-start)))
     ;; Priority increases: 0, 1, 2... matching LSP return order
@@ -165,7 +163,7 @@ Returns the created overlay."
 
     ;; Add identification for cleanup and store data
     (overlay-put ov 'eglot-codelens t)
-    (overlay-put ov 'docver eglot-codelens--version)
+    (overlay-put ov 'docver docver)
 
     ;; Set display string
     (overlay-put ov 'before-string
@@ -236,14 +234,16 @@ CODELENS-CELL is a cons cell (CODELENS . OVERLAY)."
                   (overlay-get ov 'priority)
                   total-on-line))))
 
-(defun eglot-codelens--reuse-render-overlays (old-cache)
-  "Refresh CodeLens overlays by reusing overlays from OLD-CACHE.
-This function efficiently updates overlays when file structure hasn't changed.
+(defun eglot-codelens--render-codelens (old-cache new-cache docver)
+  "Render CodeLens overlays by reusing overlays from OLD-CACHE.
+NEW-CACHE is the new cache to render.
+DOCVER is the document version for tracking overlay validity.
+This function efficiently updates overlays.
 Overlays are matched by index position within each line."
   (with-silent-modifications
     (save-excursion
       ;; Step 1: Update/create overlays for new cache
-      (dolist (new-line-group eglot-codelens--cache)
+      (dolist (new-line-group new-cache)
         (let* ((line (car new-line-group))
                (new-sorted (cdr new-line-group))
                (line-start (progn
@@ -274,41 +274,20 @@ Overlays are matched by index position within each line."
                                    line-start
                                    index
                                    total-on-line))
-                     (overlay-put old-ov 'docver eglot-codelens--version)
+                     (overlay-put old-ov 'docver docver)
                      (setcdr new-cell old-ov))
 
                     ;; Index only in new cache: create new overlay
                     (t
                      (let ((new-ov (eglot-codelens--make-overlay
-                                    line-start new-cell index total-on-line)))
+                                    line-start new-cell index total-on-line docver)))
                        (setcdr new-cell new-ov)))))))
 
     ;; Step 2: Delete all overlays with old docver (not reused)
     (dolist (ov (overlays-in (point-min) (point-max)))
       (when (and (overlay-get ov 'eglot-codelens))
-        (unless (eq (overlay-get ov 'docver) eglot-codelens--version)
+        (unless (eq (overlay-get ov 'docver) docver)
           (delete-overlay ov)))))))
-
-(defun eglot-codelens--render-codelens ()
-  "Render CodeLens in current buffer using the optimized line cache."
-  (eglot-codelens--cleanup-overlays)
-
-  (when eglot-codelens--cache
-    (with-silent-modifications
-      (save-excursion
-        ;; Use pre-computed line cache instead of regrouping
-        (dolist (line-group eglot-codelens--cache)
-          (let* ((line (car line-group))
-                 (sorted-codelens (cdr line-group))
-                 (line-start (progn
-                               (goto-char (point-min))
-                               (forward-line (1- line))
-                               (line-beginning-position)))
-                 (total-on-line (length sorted-codelens)))
-            (cl-loop for codelens-cell in sorted-codelens
-                     for index from 0
-                     for ov = (eglot-codelens--make-overlay line-start codelens-cell index total-on-line)
-                     do (setcdr codelens-cell ov))))))))
 
 ;;; Interaction Handling
 (defun eglot-codelens-execute-or-resolve (codelens-cell)
@@ -386,10 +365,9 @@ If there are multiple, show a selection menu for user to choose."
   ;; Remove all overlays
   (eglot-codelens--cleanup-overlays)
 
-  ;; Clear cache, version and line count
+  ;; Clear cache and version
   (setq eglot-codelens--cache nil
-        eglot-codelens--version nil
-        eglot-codelens--line-count nil)
+        eglot-codelens--version nil)
 
   ;; Remove Eglot document change hook
   (remove-hook 'eglot--document-changed-hook #'eglot-codelens--on-document-change t))
@@ -418,22 +396,18 @@ If there are multiple, show a selection menu for user to choose."
 (defun eglot-codelens--update-buffer ()
   "Update CodeLens display in current buffer."
   (let* ((docver eglot--versioned-identifier)
-         (current-line-count (line-number-at-pos (point-max)))
          (buf (current-buffer)))
     (eglot-codelens--fetch-codelens
      (lambda (codelens-list)
        (eglot--when-live-buffer buf
          (when (eq docver eglot--versioned-identifier)
            ;; Save old cache before updating
-           (let ((old-cache eglot-codelens--cache))
-             (setq eglot-codelens--cache (eglot-codelens--build-cache codelens-list)
+           (let ((old-cache eglot-codelens--cache)
+                 (new-cache (eglot-codelens--build-cache codelens-list)))
+             (setq eglot-codelens--cache new-cache
                    eglot-codelens--version docver)
-             ;; Use smart refresh if line count hasn't changed
-             (if (eq current-line-count eglot-codelens--line-count)
-                 (eglot-codelens--reuse-render-overlays old-cache)
-               (eglot-codelens--render-codelens))
-             ;; Always update line count to current
-             (setq eglot-codelens--line-count current-line-count))))))))
+             ;; Reuse existing overlays for optimal performance
+             (eglot-codelens--render-codelens old-cache new-cache docver))))))))
 
 ;;; Minor Mode Definition
 
