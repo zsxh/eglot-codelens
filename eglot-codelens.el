@@ -62,6 +62,11 @@
   :type 'float
   :group 'eglot-codelens)
 
+(defcustom eglot-codelens-refresh-delay 0.25
+  "Delay in seconds before refreshing CodeLens after window scroll."
+  :type 'float
+  :group 'eglot-codelens)
+
 ;;; Faces
 
 (defface eglot-codelens-face
@@ -86,6 +91,12 @@ where CODELENS-OVERLAY-CELL is (CODELENS . OVERLAY).")
 
 (defvar-local eglot-codelens--update-timer nil
   "Timer for delayed CodeLens updates.")
+
+(defvar-local eglot-codelens--scroll-timer nil
+  "Timer for delayed CodeLens refresh on window scroll.")
+
+(defvar-local eglot-codelens--updating nil
+  "Non-nil when eglot-codelens--update-buffer is in progress.")
 
 (defun eglot-codelens--build-cache (codelens-list)
   "Build cache from CODELENS-LIST.
@@ -234,10 +245,16 @@ CODELENS-CELL is a cons cell (CODELENS . OVERLAY)."
                   (overlay-get ov 'priority)
                   total-on-line))))
 
-(defun eglot-codelens--render-codelens (old-cache new-cache docver)
+(defun eglot-codelens--render-codelens (new-cache docver &optional old-cache range)
   "Render CodeLens overlays by reusing overlays from OLD-CACHE.
 NEW-CACHE is the new cache to render.
 DOCVER is the document version for tracking overlay validity.
+
+Optional argument RANGE is a cons cell (BEG . END) specifying the buffer
+position range to render. When provided, only CodeLens within this position
+range are updated. Existing overlays in the range that already have DOCVER
+are preserved unchanged.
+
 This function efficiently updates overlays.
 Overlays are matched by index position within each line."
   (with-silent-modifications
@@ -249,45 +266,60 @@ Overlays are matched by index position within each line."
                (line-start (progn
                              (goto-char (point-min))
                              (forward-line (1- line))
-                             (line-beginning-position)))
-               (total-on-line (length new-sorted))
-               ;; Find corresponding line group in old cache
-               (old-line-group (cl-find-if (lambda (group)
-                                             (= (car group) line))
-                                           old-cache))
-               (old-sorted (when old-line-group (cdr old-line-group))))
+                             (line-beginning-position))))
+          ;; Skip lines outside the specified range when range provided
+          (when (or (not range)
+                    (and (>= line-start (car range)) (<= line-start (cdr range))))
+            (let* ((total-on-line (length new-sorted))
+                   ;; Find corresponding line group in old cache
+                   (old-line-group (cl-find-if (lambda (group)
+                                                 (= (car group) line))
+                                               old-cache))
+                   (old-sorted (when old-line-group (cdr old-line-group))))
 
-          ;; Process each CodeLens by index
-          (cl-loop for new-cell in new-sorted
-                   for index from 0
-                   for old-cell = (when old-sorted
-                                   (nth index old-sorted))
-                   for old-ov = (when old-cell
-                                  (cdr old-cell))
-                   do
-                   (cond
-                    ;; Index exists in both: update overlay
-                    ((and old-cell old-ov (overlayp old-ov) (overlay-buffer old-ov))
-                     (overlay-put old-ov 'before-string
-                                  (eglot-codelens--build-display-string
-                                   new-cell
-                                   line-start
-                                   index
-                                   total-on-line))
-                     (overlay-put old-ov 'docver docver)
-                     (setcdr new-cell old-ov))
+              ;; Process each CodeLens by index
+              (cl-loop for new-cell in new-sorted
+                       for new-ov = (cdr new-cell)
+                       for index from 0
+                       for old-cell = (when old-sorted
+                                        (nth index old-sorted))
+                       for old-ov = (when old-cell
+                                      (cdr old-cell))
+                       do
+                       (cond
+                        ;; skip overlay
+                        ((and (overlayp new-ov) (overlay-buffer new-ov)
+                              (eq (overlay-get new-ov 'docver) docver))
+                         nil)
 
-                    ;; Index only in new cache: create new overlay
-                    (t
-                     (let ((new-ov (eglot-codelens--make-overlay
-                                    line-start new-cell index total-on-line docver)))
-                       (setcdr new-cell new-ov)))))))
+                        ;; update overlay
+                        ((and old-cell old-ov (overlayp old-ov) (overlay-buffer old-ov))
+                         (overlay-put old-ov 'before-string
+                                      (eglot-codelens--build-display-string
+                                       new-cell
+                                       line-start
+                                       index
+                                       total-on-line))
+                         (overlay-put old-ov 'docver docver)
+                         (setcdr new-cell old-ov))
 
-    ;; Step 2: Delete all overlays with old docver (not reused)
-    (dolist (ov (overlays-in (point-min) (point-max)))
-      (when (and (overlay-get ov 'eglot-codelens))
-        (unless (eq (overlay-get ov 'docver) docver)
-          (delete-overlay ov)))))))
+                        ;; create new overlay
+                        (t
+                         (let ((new-ov (eglot-codelens--make-overlay
+                                        line-start new-cell index total-on-line docver)))
+                           (setcdr new-cell new-ov)))))))))
+
+      ;; Step 2: Delete overlays with old docver
+      ;; When range provded, only clean overlays within that range
+      ;; Otherwise clean entire buffer
+      (let* ((beg (when range (car range)))
+             (end (when range (cdr range)))
+             (clean-beg (if beg (max beg (point-min)) (point-min)))
+             (clean-end (if end (min end (point-max)) (point-max))))
+        (dolist (ov (overlays-in clean-beg clean-end))
+          (when (and (overlay-get ov 'eglot-codelens))
+            (unless (eq (overlay-get ov 'docver) docver)
+              (delete-overlay ov))))))))
 
 ;;; Interaction Handling
 (defun eglot-codelens-execute-or-resolve (codelens-cell)
@@ -351,9 +383,12 @@ If there are multiple, show a selection menu for user to choose."
   (when eglot-codelens-mode
     ;; Initialize buffer-local variables
     (setq eglot-codelens--cache nil
-          eglot-codelens--version nil)
+          eglot-codelens--version nil
+          eglot-codelens--updating nil)
     ;; Add Eglot document change hook
-    (add-hook 'eglot--document-changed-hook #'eglot-codelens--on-document-change nil t)))
+    (add-hook 'eglot--document-changed-hook #'eglot-codelens--on-document-change nil t)
+    ;; Add window scroll hook for visible area refresh
+    (add-hook 'window-scroll-functions #'eglot-codelens--on-window-scroll nil t)))
 
 (defun eglot-codelens--cleanup-buffer ()
   "Cleanup CodeLens for current buffer."
@@ -361,16 +396,44 @@ If there are multiple, show a selection menu for user to choose."
   (when eglot-codelens--update-timer
     (cancel-timer eglot-codelens--update-timer)
     (setq eglot-codelens--update-timer nil))
+  ;; Cancel any pending scroll timer
+  (when eglot-codelens--scroll-timer
+    (cancel-timer eglot-codelens--scroll-timer)
+    (setq eglot-codelens--scroll-timer nil))
 
   ;; Remove all overlays
   (eglot-codelens--cleanup-overlays)
 
   ;; Clear cache and version
   (setq eglot-codelens--cache nil
-        eglot-codelens--version nil)
+        eglot-codelens--version nil
+        eglot-codelens--updating nil)
 
   ;; Remove Eglot document change hook
-  (remove-hook 'eglot--document-changed-hook #'eglot-codelens--on-document-change t))
+  (remove-hook 'eglot--document-changed-hook #'eglot-codelens--on-document-change t)
+  ;; Remove window scroll hook
+  (remove-hook 'window-scroll-functions #'eglot-codelens--on-window-scroll t))
+
+(defun eglot-codelens--on-window-scroll (&rest _args)
+  "Handle window scroll/resize to refresh visible CodeLens with debouncing."
+  (when eglot-codelens-mode
+    ;; If there's already a timer, just reset its time
+    (if (timerp eglot-codelens--scroll-timer)
+        ;; Reset existing timer's time
+        (timer-set-idle-time eglot-codelens--scroll-timer eglot-codelens-refresh-delay)
+      ;; Create new timer if none exists
+      (setq eglot-codelens--scroll-timer
+            (run-with-idle-timer
+             eglot-codelens-refresh-delay nil
+             (lambda (buf)
+               (when (buffer-live-p buf)
+                 (with-current-buffer buf
+                   (when (timerp eglot-codelens--scroll-timer)
+                     (cancel-timer eglot-codelens--scroll-timer))
+                   (setq eglot-codelens--scroll-timer nil)
+                   (when (eq (current-buffer) (window-buffer (selected-window)))
+                     (eglot-codelens--refresh-buffer)))))
+             (current-buffer))))))
 
 (defun eglot-codelens--on-document-change (&rest _args)
   "Handle document changes via Eglot's document-changed hook."
@@ -378,36 +441,74 @@ If there are multiple, show a selection menu for user to choose."
     ;; If there's already a timer, just reset its time instead of canceling and recreating
     (if (timerp eglot-codelens--update-timer)
         ;; Reset existing timer's time
-        (timer-set-idle-time eglot-codelens--update-timer
-                             (time-add (current-idle-time)
-                                       (seconds-to-time eglot-codelens-update-delay)))
+        (timer-set-idle-time eglot-codelens--update-timer eglot-codelens-update-delay)
       ;; Create new timer if none exists
       (setq eglot-codelens--update-timer
-            (run-with-idle-timer eglot-codelens-update-delay nil
-                                 (lambda (buf)
-                                   (when (timerp eglot-codelens--update-timer)
-                                     (cancel-timer eglot-codelens--update-timer))
-                                   (setq eglot-codelens--update-timer nil)
-                                   (when (buffer-live-p buf)
-                                     (with-current-buffer buf
-                                       (eglot-codelens--update-buffer))))
-                                 (current-buffer))))))
+            (run-with-idle-timer
+             eglot-codelens-update-delay nil
+             (lambda (buf)
+               (when (buffer-live-p buf)
+                 (with-current-buffer buf
+                   (when (timerp eglot-codelens--update-timer)
+                     (cancel-timer eglot-codelens--update-timer))
+                   (setq eglot-codelens--update-timer nil)
+                   (eglot-codelens--update-buffer))))
+             (current-buffer))))))
+
+(defun eglot-codelens--visible-range (&optional extend-lines)
+  "Calculate the visible range with optional extension.
+EXTEND-LINES is the number of lines to extend beyond the visible area
+both before and after. If nil or not provided, returns the exact visible range.
+Returns a cons cell (BEG . END) representing buffer positions."
+  (let* ((beg (window-start))
+         (end (window-end nil t))
+         (extend-beg (if extend-lines
+                         (save-excursion
+                           (goto-char beg)
+                           (forward-line (- extend-lines))
+                           (max (line-beginning-position) (point-min)))
+                       beg))
+         (extend-end (if extend-lines
+                         (save-excursion
+                           (goto-char end)
+                           (forward-line extend-lines)
+                           (min (line-beginning-position) (point-max)))
+                       end)))
+    (cons extend-beg extend-end)))
+
+(defun eglot-codelens--refresh-buffer ()
+  "Refresh CodeLens overlays in visible window area using existing cache.
+This function efficiently updates only the visible portion of the buffer
+without re-fetching CodeLens from the server."
+  (when (and eglot-codelens-mode
+             (not eglot-codelens--updating)
+             eglot-codelens--cache
+             eglot-codelens--version)
+    (let ((docver eglot-codelens--version)
+          (range (eglot-codelens--visible-range)))
+      ;; Use existing cache - no new data, just refresh visible area
+      (eglot-codelens--render-codelens eglot-codelens--cache docver nil range))))
 
 (defun eglot-codelens--update-buffer ()
   "Update CodeLens display in current buffer."
   (let* ((docver eglot--versioned-identifier)
          (buf (current-buffer)))
+    (setq eglot-codelens--updating t)
     (eglot-codelens--fetch-codelens
      (lambda (codelens-list)
-       (eglot--when-live-buffer buf
-         (when (eq docver eglot--versioned-identifier)
-           ;; Save old cache before updating
-           (let ((old-cache eglot-codelens--cache)
-                 (new-cache (eglot-codelens--build-cache codelens-list)))
-             (setq eglot-codelens--cache new-cache
-                   eglot-codelens--version docver)
-             ;; Reuse existing overlays for optimal performance
-             (eglot-codelens--render-codelens old-cache new-cache docver))))))))
+       (when (buffer-live-p buf)
+         (with-current-buffer buf
+           (unwind-protect
+               (when (eq docver eglot--versioned-identifier)
+                 ;; Save old cache before updating
+                 (let ((old-cache eglot-codelens--cache)
+                       (new-cache (eglot-codelens--build-cache codelens-list))
+                       (range (eglot-codelens--visible-range)))
+                   (setq eglot-codelens--cache new-cache
+                         eglot-codelens--version docver)
+                   ;; Reuse existing overlays for optimal performance
+                   (eglot-codelens--render-codelens new-cache docver old-cache range)))
+             (setq eglot-codelens--updating nil))))))))
 
 ;;; Minor Mode Definition
 
