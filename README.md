@@ -8,8 +8,11 @@ CodeLens support for Eglot, displaying LSP CodeLens information as overlays abov
 
 ## Features
 
-- impl `textDocument/codeLens`, `codeLens/resolve`
+- `textDocument/codeLens` and `codeLens/resolve` support
 - Display CodeLens information as overlays above code
+- Automatic CodeLens resolution in visible viewport
+- Rate-limited resolve queue to prevent server overload
+- Smart overlay caching for improved performance
 - Support mouse clicks and keyboard interaction
 - Integration with Eglot
 - VS Code icon conversion to nerd-icons (optional)
@@ -56,16 +59,18 @@ M-x eglot-codelens-execute-at-line
 ### Customization
 
 ```elisp
-;; Delay before updating CodeLens after changes (default: 0.5s)
+;; Delay before updating CodeLens after document changes (default: 0.5s)
 (setq eglot-codelens-update-delay 0.3)
+
+;; Delay before refreshing visible CodeLens after window changes (default: 0.25s)
+;; Applies to scroll events and window configuration changes
+(setq eglot-codelens-visible-refresh-delay 0.25)
+
+;; Delay between processing each CodeLens resolve request (default: 0.25s)
+;; Controls the rate at which pending resolve requests are processed
+;; to avoid overwhelming the LSP server
+(setq eglot-codelens-resolve-delay 0.25)
 ```
-
-## TODOs
-
-- [ ] auto resolve codelens
-  - [ ] in viewport
-  - [ ] on scroll change
-  - [ ] on window layout change
 
 ## License
 

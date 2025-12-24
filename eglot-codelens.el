@@ -63,7 +63,8 @@
   :group 'eglot-codelens)
 
 (defcustom eglot-codelens-visible-refresh-delay 0.25
-  "Delay in seconds before refreshing visible CodeLens after window changes."
+  "Delay in seconds before refreshing visible CodeLens after window changes.
+This applies to scroll events and window configuration changes."
   :type 'float
   :group 'eglot-codelens)
 
