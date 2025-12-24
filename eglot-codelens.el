@@ -288,15 +288,20 @@ Overlays are matched by index position within each line."
                                   (cdr old-cell))
                    do
                    (cond
-                    ;; skip overlay (already up to date)
-                    ((and new-ov (overlayp new-ov) (overlay-buffer new-ov)
-                          (eq (overlay-get new-ov 'eglot-codelens-docver) docver))
-                     nil)
-
                     ;; Within range: update/create overlay with new codelens data
                     (in-range-p
                      (cond
-                      ;; reuse existing overlay from old-cache
+                      ;; update existing overlay from new-cache
+                      ((and new-ov (overlayp new-ov) (overlay-buffer new-ov))
+                       (unless (eq (overlay-get new-ov 'eglot-codelens-docver) docver)
+                         (overlay-put new-ov 'before-string
+                                      (eglot-codelens--build-display-string
+                                       new-cell
+                                       line-start
+                                       index
+                                       total-on-line))))
+
+                      ;; reuse and update existing overlay from old-cache
                       ((and old-ov (overlayp old-ov) (overlay-buffer old-ov))
                        (overlay-put old-ov 'before-string
                                     (eglot-codelens--build-display-string
@@ -318,11 +323,13 @@ Overlays are matched by index position within each line."
                     ((and old-ov (overlayp old-ov) (overlay-buffer old-ov))
                      (overlay-put old-ov 'eglot-codelens-usever docver)
                      (setcdr new-cell old-ov))))))
+
       ;; Step 2: Delete overlays with old usever (entire buffer)
-      (dolist (ov (overlays-in (point-min) (point-max)))
-        (when (and (overlay-get ov 'eglot-codelens)
-                   (not (eq (overlay-get ov 'eglot-codelens-usever) docver)))
-          (delete-overlay ov))))))
+      (when old-cache
+        (dolist (ov (overlays-in (point-min) (point-max)))
+          (when (and (overlay-get ov 'eglot-codelens)
+                     (not (eq (overlay-get ov 'eglot-codelens-usever) docver)))
+            (delete-overlay ov)))))))
 
 ;;; Interaction Handling
 (defun eglot-codelens-execute-or-resolve (codelens-cell)
