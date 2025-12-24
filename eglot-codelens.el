@@ -83,8 +83,8 @@
 
 (defvar-local eglot-codelens--cache nil
   "Cache for CodeLens objects grouped by line in current buffer.
-Each element is a cons cell (LINENUM . (CODELENS-OVERLAY-CELL ...))
-where CODELENS-OVERLAY-CELL is (CODELENS . OVERLAY).")
+A hash table with line numbers as keys.
+Each value is a SORTED list of CODELENS-OVERLAY-CELL where CODELENS-OVERLAY-CELL is (CODELENS . OVERLAY).")
 
 (defvar-local eglot-codelens--version nil
   "Document version for cached CodeLens.")
@@ -98,25 +98,28 @@ where CODELENS-OVERLAY-CELL is (CODELENS . OVERLAY).")
 (defvar-local eglot-codelens--updating nil
   "Non-nil when eglot-codelens--update-buffer is in progress.")
 
+(defvar-local eglot-codelens--pending-lines nil
+  "List of line numbers with pending CodeLens to be rendered.
+This is used to track which lines need processing during partial updates.")
+
 (defun eglot-codelens--build-cache (codelens-list)
   "Build cache from CODELENS-LIST.
-Returns a list of cons cells (LINENUM . (CODELENS-OVERLAY-CELL ...))
-where CODELENS-OVERLAY-CELL is (CODELENS . OVERLAY)."
+Returns a hash table with line numbers as keys.
+Each value is a sorted list of CODELENS-OVERLAY-CELL where CODELENS-OVERLAY-CELL is (CODELENS . OVERLAY)."
   (when codelens-list
     (let ((line-groups (make-hash-table :test 'eq)))
       ;; Group CodeLens by line number
       (cl-loop for codelens across codelens-list
                for range = (plist-get codelens :range)
+               ;; Position in a text document expressed as zero-based line and zero-based character offset.
                for line = (1+ (plist-get (plist-get range :start) :line))
                do (push (cons codelens nil) (gethash line line-groups)))
 
-      ;; Convert hash table to list format
-      (let ((result nil))
-        (maphash (lambda (line codelens-on-line)
-                   (push (cons line (nreverse codelens-on-line))
-                         result))
-                 line-groups)
-        result))))
+      ;; Reverse each list to maintain LSP order (sorted by index)
+      (maphash (lambda (_line codelens-on-line)
+                 (puthash _line (nreverse codelens-on-line) line-groups))
+               line-groups)
+      line-groups)))
 
 ;;; LSP Protocol Handlers
 
@@ -231,12 +234,10 @@ CODELENS-CELL is a cons cell (CODELENS . OVERLAY)."
   (let* ((ov (cdr codelens-cell))
          (line-start (overlay-start ov))
          (line (line-number-at-pos line-start))
-         ;; Find line group in cache
-         (line-group (cl-find-if (lambda (group)
-                                   (= (car group) line))
-                                 eglot-codelens--cache))
-         (total-on-line (if line-group
-                            (length (cdr line-group))
+         ;; Find line group in cache (hashtable lookup)
+         (sorted-codelens (gethash line eglot-codelens--cache))
+         (total-on-line (if sorted-codelens
+                            (length sorted-codelens)
                           1)))
     ;; Update the display string using the common function
     (overlay-put ov 'before-string
@@ -246,90 +247,105 @@ CODELENS-CELL is a cons cell (CODELENS . OVERLAY)."
                   (overlay-get ov 'priority)
                   total-on-line))))
 
-(defun eglot-codelens--render-codelens (new-cache docver &optional old-cache range)
+(defun eglot-codelens--render-codelens (new-cache docver pending-lines &optional old-cache range)
   "Render CodeLens overlays by reusing overlays from OLD-CACHE.
-NEW-CACHE is the new cache to render.
+NEW-CACHE is a hash table of the new cache to render (line -> sorted list of cells).
 DOCVER is the document version for tracking overlay validity.
+PENDING-LINES is a list of line numbers to process.
 
-Optional argument RANGE is a cons cell (BEG . END) specifying the buffer
-position range to render. When provided, only CodeLens within this position
-range are updated. Existing overlays in the range that already have DOCVER
+Optional argument OLD-CACHE is the previous cache for overlay reuse.
+When provided, existing overlays are reused where possible.
+
+Optional argument RANGE is a cons cell (BEG-LINE . END-LINE) specifying the line
+number range to render. When provided, only CodeLens within this line range
+are updated. Existing overlays in the range that already have DOCVER
 are preserved unchanged.
 
 This function efficiently updates overlays.
 Overlays are matched by index position within each line."
   (with-silent-modifications
     (save-excursion
-      ;; Step 1: Process all lines in new-cache
-      (dolist (new-line-group new-cache)
-        (let* ((line (car new-line-group))
-               (new-sorted (cdr new-line-group))
-               (line-start (progn
-                             (goto-char (point-min))
-                             (forward-line (1- line))
-                             (line-beginning-position)))
-               (in-range-p (or (not range)
-                               (and (>= line-start (car range))
-                                    (<= line-start (cdr range)))))
-               (total-on-line (length new-sorted))
-               ;; Find corresponding line group in old cache
-               (old-line-group (cl-find-if (lambda (group)
-                                             (= (car group) line))
-                                           old-cache))
-               (old-sorted (when old-line-group (cdr old-line-group))))
+      ;; Step 1: Process pending lines
+      (let ((lines-to-process pending-lines)
+            (lines-processed nil))
+        (dolist (line lines-to-process)
+          (let* ((new-sorted (gethash line new-cache)))
+            (when new-sorted
+              (let* ((line-start (progn
+                                   (goto-char (point-min))
+                                   (forward-line (1- line))
+                                   (line-beginning-position)))
+                     (in-range-p (or (not range)
+                                     (and (>= line (car range))
+                                          (<= line (cdr range)))))
+                     (total-on-line (length new-sorted))
+                     ;; Find corresponding line group in old cache
+                     (old-sorted (when old-cache
+                                   (gethash line old-cache))))
 
-          ;; Process each CodeLens by index
-          (cl-loop for new-cell in new-sorted
-                   for new-ov = (cdr new-cell)
-                   for index from 0
-                   for old-cell = (when old-sorted
-                                    (nth index old-sorted))
-                   for old-ov = (when old-cell
-                                  (cdr old-cell))
-                   do
-                   (cond
-                    ;; Within range: update/create overlay with new codelens data
-                    (in-range-p
-                     (cond
-                      ;; update existing overlay from new-cache
-                      ((and new-ov (overlayp new-ov) (overlay-buffer new-ov))
-                       (unless (eq (overlay-get new-ov 'eglot-codelens-docver) docver)
-                         (overlay-put new-ov 'before-string
-                                      (eglot-codelens--build-display-string
-                                       new-cell
-                                       line-start
-                                       index
-                                       total-on-line))))
+                ;; Process each CodeLens by index
+                (cl-loop for new-cell in new-sorted
+                         for new-ov = (cdr new-cell)
+                         for index from 0
+                         for old-cell = (when old-sorted
+                                          (nth index old-sorted))
+                         for old-ov = (when old-cell
+                                        (cdr old-cell))
+                         do
+                         (cond
+                          ;; Within range: update/create overlay with new codelens data
+                          (in-range-p
+                           (cond
+                            ;; update existing overlay from new-cache
+                            ((and new-ov (overlayp new-ov) (overlay-buffer new-ov))
+                             (unless (eq (overlay-get new-ov 'eglot-codelens-docver) docver)
+                               (overlay-put new-ov 'before-string
+                                            (eglot-codelens--build-display-string
+                                             new-cell
+                                             line-start
+                                             index
+                                             total-on-line))))
 
-                      ;; reuse and update existing overlay from old-cache
-                      ((and old-ov (overlayp old-ov) (overlay-buffer old-ov))
-                       (overlay-put old-ov 'before-string
-                                    (eglot-codelens--build-display-string
-                                     new-cell
-                                     line-start
-                                     index
-                                     total-on-line))
-                       (overlay-put old-ov 'eglot-codelens-docver docver)
-                       (overlay-put old-ov 'eglot-codelens-usever docver)
-                       (setcdr new-cell old-ov))
+                            ;; reuse and update existing overlay from old-cache
+                            ((and old-ov (overlayp old-ov) (overlay-buffer old-ov))
+                             (overlay-put old-ov 'before-string
+                                          (eglot-codelens--build-display-string
+                                           new-cell
+                                           line-start
+                                           index
+                                           total-on-line))
+                             (overlay-put old-ov 'eglot-codelens-docver docver)
+                             (overlay-put old-ov 'eglot-codelens-usever docver)
+                             (setcdr new-cell old-ov))
 
-                      ;; create new overlay
-                      (t
-                       (let ((new-ov (eglot-codelens--make-overlay
-                                      line-start new-cell index total-on-line docver)))
-                         (setcdr new-cell new-ov)))))
+                            ;; create new overlay
+                            (t
+                             (let ((new-ov (eglot-codelens--make-overlay
+                                            line-start new-cell index total-on-line docver)))
+                               (setcdr new-cell new-ov)))))
 
-                    ;; Outside range: reuse overlay from old-cache, only update usever
-                    ((and old-ov (overlayp old-ov) (overlay-buffer old-ov))
-                     (overlay-put old-ov 'eglot-codelens-usever docver)
-                     (setcdr new-cell old-ov))))))
+                          ;; Outside range: reuse overlay from old-cache, only update usever
+                          ((and old-ov (overlayp old-ov) (overlay-buffer old-ov))
+                           (overlay-put old-ov 'eglot-codelens-usever docver)
+                           (setcdr new-cell old-ov))))
 
-      ;; Step 2: Delete overlays with old usever (entire buffer)
-      (when old-cache
-        (dolist (ov (overlays-in (point-min) (point-max)))
-          (when (and (overlay-get ov 'eglot-codelens)
-                     (not (eq (overlay-get ov 'eglot-codelens-usever) docver)))
-            (delete-overlay ov)))))))
+                ;; Track this line as processed if in range
+                (when in-range-p
+                  (push line lines-processed))))))
+
+        ;; Step 2: Delete overlays with old usever (entire buffer)
+        (when old-cache
+          (dolist (ov (overlays-in (point-min) (point-max)))
+            (when (and (overlay-get ov 'eglot-codelens)
+                       (not (eq (overlay-get ov 'eglot-codelens-usever) docver)))
+              (delete-overlay ov))))
+
+        ;; Step 3: Update pending-lines cache (remove processed lines)
+        (when lines-processed
+          (setq eglot-codelens--pending-lines
+                (cl-loop for line in eglot-codelens--pending-lines
+                         unless (memq line lines-processed)
+                         collect line)))))))
 
 ;;; Interaction Handling
 (defun eglot-codelens-execute-or-resolve (codelens-cell)
@@ -362,11 +378,9 @@ If there's only one CodeLens, execute it directly.
 If there are multiple, show a selection menu for user to choose."
   (interactive)
   (let* ((line (line-number-at-pos))
-         (line-group (cl-find-if (lambda (group)
-                                   (= (car group) line))
-                                 eglot-codelens--cache)))
-    (if-let* ((sorted-codelens (and line-group
-                                    (cdr line-group))))
+         ;; Get line group from cache (hashtable lookup)
+         (sorted-codelens (gethash line eglot-codelens--cache)))
+    (if sorted-codelens
         (if (= (length sorted-codelens) 1)
             ;; Only one CodeLens, execute it directly from cache
             (eglot-codelens-execute-or-resolve (car sorted-codelens))
@@ -419,7 +433,8 @@ If there are multiple, show a selection menu for user to choose."
   ;; Clear cache and version
   (setq eglot-codelens--cache nil
         eglot-codelens--version nil
-        eglot-codelens--updating nil)
+        eglot-codelens--updating nil
+        eglot-codelens--pending-lines nil)
 
   ;; Remove Eglot document change hook
   (remove-hook 'eglot--document-changed-hook #'eglot-codelens--on-document-change t)
@@ -473,22 +488,19 @@ If there are multiple, show a selection menu for user to choose."
   "Calculate the visible range with optional extension.
 EXTEND-LINES is the number of lines to extend beyond the visible area
 both before and after. If nil or not provided, returns the exact visible range.
-Returns a cons cell (BEG . END) representing buffer positions."
+Returns a cons cell (BEG-LINE . END-LINE) representing line numbers."
   (let* ((beg (window-start))
          (end (window-end nil t))
-         (extend-beg (if extend-lines
-                         (save-excursion
-                           (goto-char beg)
-                           (forward-line (- extend-lines))
-                           (max (line-beginning-position) (point-min)))
-                       beg))
-         (extend-end (if extend-lines
-                         (save-excursion
-                           (goto-char end)
-                           (forward-line extend-lines)
-                           (min (line-beginning-position) (point-max)))
-                       end)))
-    (cons extend-beg extend-end)))
+         (beg-line (line-number-at-pos beg))
+         (end-line (line-number-at-pos end))
+         (extend-beg-line (if extend-lines
+                              (max 1 (- beg-line extend-lines))
+                            beg-line))
+         (extend-end-line (if extend-lines
+                              (min (line-number-at-pos (point-max))
+                                   (+ end-line extend-lines))
+                            end-line)))
+    (cons extend-beg-line extend-end-line)))
 
 (defun eglot-codelens--refresh-buffer ()
   "Refresh CodeLens overlays in visible window area using existing cache.
@@ -498,11 +510,16 @@ without re-fetching CodeLens from the server."
              (not eglot-codelens--updating)
              eglot-codelens--cache
              eglot-codelens--version)
-    (let ((docver eglot-codelens--version)
-          (range (eglot-codelens--visible-range)))
+    (let* ((docver eglot-codelens--version)
+           (range (eglot-codelens--visible-range))
+           (beg-line (car range))
+           (end-line (cdr range))
+           ;; Filter pending-lines to only those within visible range
+           (pending-lines (cl-loop for line in eglot-codelens--pending-lines
+                                   when (and (>= line beg-line) (<= line end-line))
+                                   collect line)))
       ;; Use existing cache - no new data, just refresh visible area
-      ;; TODO: codelens todo list
-      (eglot-codelens--render-codelens eglot-codelens--cache docver nil range))))
+      (eglot-codelens--render-codelens eglot-codelens--cache docver pending-lines nil range))))
 
 (defun eglot-codelens--update-buffer ()
   "Update CodeLens display in current buffer."
@@ -518,11 +535,18 @@ without re-fetching CodeLens from the server."
                  ;; Save old cache before updating
                  (let ((old-cache eglot-codelens--cache)
                        (new-cache (eglot-codelens--build-cache codelens-list))
-                       (range (eglot-codelens--visible-range)))
+                       (range (eglot-codelens--visible-range))
+                       all-lines)
+                   ;; Initialize pending-lines with all lines from new cache
+                   (when new-cache
+                     (maphash (lambda (line _) (push line all-lines))
+                              new-cache))
                    (setq eglot-codelens--cache new-cache
-                         eglot-codelens--version docver)
+                         eglot-codelens--version docver
+                         eglot-codelens--pending-lines all-lines)
                    ;; Reuse existing overlays for optimal performance
-                   (eglot-codelens--render-codelens new-cache docver old-cache range)))
+                   ;; Pass pending-lines to track which lines need processing
+                   (eglot-codelens--render-codelens new-cache docver all-lines old-cache range)))
              (setq eglot-codelens--updating nil))))))))
 
 ;;; Minor Mode Definition
