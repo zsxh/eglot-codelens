@@ -236,14 +236,14 @@ CODELENS-CELL is a cons cell (CODELENS . OVERLAY)."
          (separator (if is-last "\n" "|")))
     (concat
      indentation
-     (propertize (eglot-codelens--format-text codelens)
+     (propertize (eglot-codelens--format-text codelens-cell)
                  'face 'eglot-codelens-face
                  'mouse-face 'eglot-codelens-mouse-face
-                 'help-echo (eglot-codelens--help-text codelens)
+                 'help-echo "Click to execute this CodeLens command"
                  'keymap (let ((map (make-sparse-keymap)))
                            (define-key map [mouse-1]
                              (lambda () (interactive)
-                               (eglot-codelens-execute-or-resolve codelens-cell)))
+                               (eglot-codelens-execute codelens-cell)))
                            map))
      separator)))
 
@@ -260,6 +260,9 @@ Returns the created overlay."
     (overlay-put ov 'eglot-codelens t)
     (overlay-put ov 'eglot-codelens-docver docver)
     (overlay-put ov 'eglot-codelens-usever docver)
+    (when-let* ((codelens (car codelens-cell))
+                (command (plist-get codelens :command)))
+      (overlay-put ov 'eglot-codelens-command command))
 
     ;; Set display string
     (overlay-put ov 'before-string
@@ -289,18 +292,18 @@ If the icon is not recognized, returns the original placeholder."
        t)
     title))
 
-(defun eglot-codelens--format-text (codelens)
-  "Format display text for CODELENS."
-  (if-let* ((command (plist-get codelens :command))
-            (title (plist-get command :title)))
-      (eglot-codelens--codicons-to-nerd-icons title)
-    "Resolve CodeLens"))
-
-(defun eglot-codelens--help-text (codelens)
-  "Generate help text for CODELENS."
-  (if (plist-get codelens :command)
-      "Click to execute this CodeLens command"
-    "Click to resolve CodeLens..."))
+(defun eglot-codelens--format-text (codelens-cell)
+  "Format display text for CODELENS-CELL.
+CODELENS-CELL is a cons cell (CODELENS . OVERLAY)."
+  (let* ((codelens (car codelens-cell))
+         (ov (cdr codelens-cell))
+         (command (or (plist-get codelens :command)
+                      (when (and ov (overlayp ov) (overlay-buffer ov))
+                        (overlay-get ov 'eglot-codelens-command))))
+         (title (when command (plist-get command :title))))
+    (if title
+        (eglot-codelens--codicons-to-nerd-icons title)
+      "Loading...")))
 
 (defun eglot-codelens--cleanup-overlays ()
   "Clean up all CodeLens overlays in current buffer."
@@ -313,14 +316,14 @@ If the icon is not recognized, returns the original placeholder."
 CODELENS-CELL is a cons cell (CODELENS . OVERLAY).
 RESOLVED is the resolved CodeLens data from the server."
   (let* ((codelens (car codelens-cell))
-         (ov (cdr codelens-cell)))
+         (ov (cdr codelens-cell))
+         (command (plist-get resolved :command)))
     (when (and eglot-codelens-mode
-               (overlayp ov)
-               (overlay-buffer ov)
+               ov (overlayp ov) (overlay-buffer ov)
                (eq (overlay-get ov 'eglot-codelens-docver) eglot-codelens--version))
       ;; Update cache with resolved codelens
       (cl-remf codelens :data)
-      (plist-put codelens :command (plist-get resolved :command))
+      (plist-put codelens :command command)
 
       ;; Update the display string
       (let* ((line-start (overlay-start ov))
@@ -330,6 +333,7 @@ RESOLVED is the resolved CodeLens data from the server."
              (total-on-line (if sorted-codelens
                                 (length sorted-codelens)
                               1)))
+        (overlay-put ov 'eglot-codelens-command command)
         (overlay-put ov 'before-string
                      (eglot-codelens--build-display-string
                       codelens-cell
@@ -401,6 +405,7 @@ Overlays are matched by index position within each line."
 
                             ;; reuse and update existing overlay from old-cache
                             ((and old-ov (overlayp old-ov) (overlay-buffer old-ov))
+                             (setcdr new-cell old-ov)
                              (overlay-put old-ov 'before-string
                                           (eglot-codelens--build-display-string
                                            new-cell
@@ -408,8 +413,7 @@ Overlays are matched by index position within each line."
                                            index
                                            total-on-line))
                              (overlay-put old-ov 'eglot-codelens-docver docver)
-                             (overlay-put old-ov 'eglot-codelens-usever docver)
-                             (setcdr new-cell old-ov))
+                             (overlay-put old-ov 'eglot-codelens-usever docver))
 
                             ;; create new overlay
                             (t
@@ -452,15 +456,22 @@ Overlays are matched by index position within each line."
           (eglot-codelens--resolve-schedule))))))
 
 ;;; Interaction Handling
-(defun eglot-codelens-execute-or-resolve (codelens-cell)
-  "Execute CodeLens command or resolve CodeLens in CODELENS-CELL.
+(defun eglot-codelens-execute (codelens-cell)
+  "Execute CodeLens command from CODELENS-CELL.
+If the command is already available (from codelens or overlay), execute it directly.
+If the command needs resolving, trigger the resolve process.
 CODELENS-CELL is a cons cell (CODELENS . OVERLAY)."
   (let* ((codelens (car codelens-cell))
-         (command (plist-get codelens :command)))
-    (if command
-        ;; Execute resolved command
-        (eglot-execute (eglot--current-server-or-lose) command)
-      ;; Resolve command and update overlay
+         (ov (cdr codelens-cell))
+         (codelens-command (plist-get codelens :command))
+         (overlay-command (when (and ov (overlayp ov) (overlay-buffer ov))
+                            (overlay-get ov 'eglot-codelens-command)))
+         (command (or codelens-command overlay-command)))
+    ;; Execute resolved command
+    (when command
+      (eglot-execute (eglot--current-server-or-lose) command))
+    ;; Resolve command and update overlay if needed
+    (unless codelens-command
       (eglot-codelens--resolve-codelens codelens-cell))))
 
 (defun eglot-codelens-execute-at-line ()
@@ -474,17 +485,20 @@ If there are multiple, show a selection menu for user to choose."
     (if sorted-codelens
         (if (= (length sorted-codelens) 1)
             ;; Only one CodeLens, execute it directly from cache
-            (eglot-codelens-execute-or-resolve (car sorted-codelens))
+            (eglot-codelens-execute (car sorted-codelens))
           ;; Multiple CodeLens, show selection menu using cached sorted list
           (let* ((choices (cl-loop for codelens-cell in sorted-codelens
                                    for index from 0
-                                   for codelens = (car codelens-cell)
-                                   collect (cons (format "[%d] %s" index (eglot-codelens--format-text codelens))
-                                                 codelens-cell)))
+                                   collect (cons
+                                            (format "[%d] %s" index
+                                                    (eglot-codelens--format-text codelens-cell))
+                                            codelens-cell)))
                  (vertico-sort-function nil) ;; No sorting if using vertico
-                 (selected-cell (cdr (assoc (completing-read (format "CodeLens (L%d): " line) choices) choices))))
+                 (selected-cell (cdr (assoc
+                                      (completing-read (format "CodeLens (L%d): " line) choices)
+                                      choices))))
             (when selected-cell
-              (eglot-codelens-execute-or-resolve selected-cell))))
+              (eglot-codelens-execute selected-cell))))
       (message (format "No CodeLens found at line %d." line)))))
 
 ;;; Eglot Integration
