@@ -19,7 +19,7 @@ CodeLens support for Eglot, displaying LSP CodeLens information as overlays abov
 
 ## Requirements
 
-- Emacs 26.3+
+- Emacs 30+
 - Eglot 1.19+
 
 ## Installation
