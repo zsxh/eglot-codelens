@@ -95,9 +95,6 @@ Each value is a SORTED list of CODELENS-OVERLAY-CELL where CODELENS-OVERLAY-CELL
 (defvar-local eglot-codelens--refresh-timer nil
   "Timer for delayed CodeLens refresh on window visible changes.")
 
-(defvar-local eglot-codelens--updating nil
-  "Non-nil when eglot-codelens--update-buffer is in progress.")
-
 (defvar-local eglot-codelens--pending-lines nil
   "List of line numbers with pending CodeLens to be rendered.
 This is used to track which lines need processing during partial updates.")
@@ -123,21 +120,56 @@ Each value is a sorted list of CODELENS-OVERLAY-CELL where CODELENS-OVERLAY-CELL
 
 ;;; LSP Protocol Handlers
 
-(defun eglot-codelens--fetch-codelens (cb)
-  "Fetch CodeLens for current buffer with Callback CB."
-  (let* ((method :textDocument/codeLens)
-         (params (list :textDocument (eglot--TextDocumentIdentifier))))
-    (eglot--async-request
-     (eglot--current-server-or-lose) method params
-     :success-fn cb
-     :hint method)))
+(defun eglot-codelens--resolve-codelens (codelens-cell)
+  "Resolve CODELENS-CELL and update its overlay.
+Makes an async request to :codeLens/resolve.
+CODELENS-CELL is a cons cell (CODELENS . OVERLAY)."
+  (let* ((codelens (car codelens-cell))
+         (ov (cdr codelens-cell))
+         (buf (current-buffer))
+         (docver (overlay-get ov 'eglot-codelens-docver))
+         (server (eglot-current-server)))
+    (when (and server (eglot-server-capable :codeLensProvider :resolveProvider))
+      (eglot--async-request
+       server :codeLens/resolve codelens
+       :success-fn (lambda (resolved)
+                     (when (buffer-live-p buf)
+                       (with-current-buffer buf
+                         (eglot-codelens--update-resolved-codelens codelens-cell resolved))))
+       :hint :codeLens/resolve))))
 
-(defun eglot-codelens--resolve-codelens (codelens)
-  "Resolve CODELENS details."
-  (when-let* ((server (eglot-current-server)))
-    (if (eglot-server-capable :codeLensProvider :resolveProvider)
-        (eglot--request server :codeLens/resolve codelens)
-      (message "Server does not support CodeLens resolve"))))
+(defun eglot-codelens--fetch-codelens ()
+  "Fetch CodeLens from server and update display in current buffer.
+Makes an async request to :textDocument/codeLens.
+Renders only the visible area initially, with the full cache stored
+for later visible-area refreshes."
+  (when-let* ((server (eglot-current-server))
+              (docver eglot--versioned-identifier)
+              (buf (current-buffer)))
+    (eglot--async-request
+     server
+     :textDocument/codeLens (list :textDocument (eglot--TextDocumentIdentifier))
+     :success-fn (lambda (codelens-list)
+                   (when (buffer-live-p buf)
+                     (with-current-buffer buf
+                       (when (and eglot-codelens-mode
+                                  (eq docver eglot--versioned-identifier))
+                         ;; Save old cache before updating
+                         (let ((old-cache eglot-codelens--cache)
+                               (new-cache (eglot-codelens--build-cache codelens-list))
+                               (range (eglot-codelens--visible-range))
+                               all-lines)
+                           ;; Initialize pending-lines with all lines from new cache
+                           (when new-cache
+                             (maphash (lambda (line _) (push line all-lines)) new-cache))
+                           ;; Reuse existing overlays for optimal performance
+                           ;; Pass pending-lines to track which lines need processing
+                           (eglot-codelens--render-codelens
+                            new-cache docver all-lines old-cache range)
+                           (setq eglot-codelens--cache new-cache
+                                 eglot-codelens--version docver
+                                 eglot-codelens--pending-lines all-lines))))))
+     :hint :textDocument/codeLens)))
 
 ;;; UI Display System
 
@@ -227,25 +259,34 @@ If the icon is not recognized, returns the original placeholder."
     (when (overlay-get ov 'eglot-codelens)
       (delete-overlay ov))))
 
-(defun eglot-codelens--update-single-overlay (codelens-cell)
-  "Update overlay in CODELENS-CELL with resolved CodeLens data.
-CODELENS-CELL is a cons cell (CODELENS . OVERLAY)."
-  ;; Get line number from overlay position
-  (let* ((ov (cdr codelens-cell))
-         (line-start (overlay-start ov))
-         (line (line-number-at-pos line-start))
-         ;; Find line group in cache (hashtable lookup)
-         (sorted-codelens (gethash line eglot-codelens--cache))
-         (total-on-line (if sorted-codelens
-                            (length sorted-codelens)
-                          1)))
-    ;; Update the display string using the common function
-    (overlay-put ov 'before-string
-                 (eglot-codelens--build-display-string
-                  codelens-cell
-                  line-start
-                  (overlay-get ov 'priority)
-                  total-on-line))))
+(defun eglot-codelens--update-resolved-codelens (codelens-cell resolved)
+  "Update overlay in CODELENS-CELL with RESOLVED CodeLens data.
+CODELENS-CELL is a cons cell (CODELENS . OVERLAY).
+RESOLVED is the resolved CodeLens data from the server."
+  (let* ((codelens (car codelens-cell))
+         (ov (cdr codelens-cell)))
+    (when (and eglot-codelens-mode
+               (overlayp ov)
+               (overlay-buffer ov)
+               (eq (overlay-get ov 'eglot-codelens-docver) eglot-codelens--version))
+      ;; Update cache with resolved codelens
+      (cl-remf codelens :data)
+      (plist-put codelens :command (plist-get resolved :command))
+
+      ;; Update the display string
+      (let* ((line-start (overlay-start ov))
+             (line (line-number-at-pos line-start))
+             ;; Find line group in cache (hashtable lookup)
+             (sorted-codelens (gethash line eglot-codelens--cache))
+             (total-on-line (if sorted-codelens
+                                (length sorted-codelens)
+                              1)))
+        (overlay-put ov 'before-string
+                     (eglot-codelens--build-display-string
+                      codelens-cell
+                      line-start
+                      (overlay-get ov 'priority)
+                      total-on-line))))))
 
 (defun eglot-codelens--render-codelens (new-cache docver pending-lines &optional old-cache range)
   "Render CodeLens overlays by reusing overlays from OLD-CACHE.
@@ -357,20 +398,7 @@ CODELENS-CELL is a cons cell (CODELENS . OVERLAY)."
         ;; Execute resolved command
         (eglot-execute (eglot--current-server-or-lose) command)
       ;; Resolve command and update overlay
-      (eglot-codelens--resolve-and-update codelens-cell))))
-
-(defun eglot-codelens--resolve-and-update (codelens-cell)
-  "Resolve CODELENS in CODELENS-CELL and update its overlay.
-CODELENS-CELL is a cons cell (CODELENS . OVERLAY)."
-  (let* ((codelens (car codelens-cell)))
-    (if-let* ((resolved (eglot-codelens--resolve-codelens codelens)))
-        (progn
-          ;; Update cache with resolved codelens
-          (cl-remf codelens :data)
-          (plist-put codelens :command (plist-get resolved :command))
-          ;; Update only the specific overlay
-          (eglot-codelens--update-single-overlay codelens-cell))
-      (message "Failed to resolve CodeLens command"))))
+      (eglot-codelens--resolve-codelens codelens-cell))))
 
 (defun eglot-codelens-execute-at-line ()
   "Execute CodeLens at current line.
@@ -398,17 +426,12 @@ If there are multiple, show a selection menu for user to choose."
 
 ;;; Eglot Integration
 
-(defun eglot-codelens--server-supports-codelens ()
-  "Check if current server supports CodeLens."
-  (eglot-server-capable :codeLensProvider))
-
 (defun eglot-codelens--setup-buffer ()
   "Setup CodeLens for current buffer."
   (when eglot-codelens-mode
     ;; Initialize buffer-local variables
     (setq eglot-codelens--cache nil
-          eglot-codelens--version nil
-          eglot-codelens--updating nil)
+          eglot-codelens--version nil)
     ;; Add Eglot document change hook
     (add-hook 'eglot--document-changed-hook #'eglot-codelens--on-document-change nil t)
     ;; Add window scroll hook for visible area refresh
@@ -433,7 +456,6 @@ If there are multiple, show a selection menu for user to choose."
   ;; Clear cache and version
   (setq eglot-codelens--cache nil
         eglot-codelens--version nil
-        eglot-codelens--updating nil
         eglot-codelens--pending-lines nil)
 
   ;; Remove Eglot document change hook
@@ -461,7 +483,7 @@ If there are multiple, show a selection menu for user to choose."
                      (cancel-timer eglot-codelens--refresh-timer))
                    (setq eglot-codelens--refresh-timer nil)
                    (when (eq (current-buffer) (window-buffer (selected-window)))
-                     (eglot-codelens--refresh-buffer)))))
+                     (eglot-codelens--refresh-visible-area)))))
              (current-buffer))))))
 
 (defun eglot-codelens--on-document-change (&rest _args)
@@ -481,7 +503,7 @@ If there are multiple, show a selection menu for user to choose."
                    (when (timerp eglot-codelens--update-timer)
                      (cancel-timer eglot-codelens--update-timer))
                    (setq eglot-codelens--update-timer nil)
-                   (eglot-codelens--update-buffer))))
+                   (eglot-codelens--fetch-codelens))))
              (current-buffer))))))
 
 (defun eglot-codelens--visible-range (&optional extend-lines)
@@ -502,14 +524,13 @@ Returns a cons cell (BEG-LINE . END-LINE) representing line numbers."
                             end-line)))
     (cons extend-beg-line extend-end-line)))
 
-(defun eglot-codelens--refresh-buffer ()
+(defun eglot-codelens--refresh-visible-area ()
   "Refresh CodeLens overlays in visible window area using existing cache.
 This function efficiently updates only the visible portion of the buffer
 without re-fetching CodeLens from the server."
   (when (and eglot-codelens-mode
-             (not eglot-codelens--updating)
              eglot-codelens--cache
-             eglot-codelens--version)
+             (eq eglot-codelens--version eglot--versioned-identifier))
     (let* ((docver eglot-codelens--version)
            (range (eglot-codelens--visible-range))
            (beg-line (car range))
@@ -519,35 +540,8 @@ without re-fetching CodeLens from the server."
                                    when (and (>= line beg-line) (<= line end-line))
                                    collect line)))
       ;; Use existing cache - no new data, just refresh visible area
-      (eglot-codelens--render-codelens eglot-codelens--cache docver pending-lines nil range))))
-
-(defun eglot-codelens--update-buffer ()
-  "Update CodeLens display in current buffer."
-  (let* ((docver eglot--versioned-identifier)
-         (buf (current-buffer)))
-    (setq eglot-codelens--updating t)
-    (eglot-codelens--fetch-codelens
-     (lambda (codelens-list)
-       (when (buffer-live-p buf)
-         (with-current-buffer buf
-           (unwind-protect
-               (when (eq docver eglot--versioned-identifier)
-                 ;; Save old cache before updating
-                 (let ((old-cache eglot-codelens--cache)
-                       (new-cache (eglot-codelens--build-cache codelens-list))
-                       (range (eglot-codelens--visible-range))
-                       all-lines)
-                   ;; Initialize pending-lines with all lines from new cache
-                   (when new-cache
-                     (maphash (lambda (line _) (push line all-lines))
-                              new-cache))
-                   (setq eglot-codelens--cache new-cache
-                         eglot-codelens--version docver
-                         eglot-codelens--pending-lines all-lines)
-                   ;; Reuse existing overlays for optimal performance
-                   ;; Pass pending-lines to track which lines need processing
-                   (eglot-codelens--render-codelens new-cache docver all-lines old-cache range)))
-             (setq eglot-codelens--updating nil))))))))
+      (eglot-codelens--render-codelens
+       eglot-codelens--cache docver pending-lines nil range))))
 
 ;;; Minor Mode Definition
 
@@ -557,10 +551,10 @@ without re-fetching CodeLens from the server."
   :group 'eglot-codelens
   (cond
    (eglot-codelens-mode
-    (if (and eglot--managed-mode (eglot-codelens--server-supports-codelens))
+    (if (and eglot--managed-mode (eglot-server-capable :codeLensProvider))
         (progn
           (eglot-codelens--setup-buffer)
-          (eglot-codelens--update-buffer))
+          (eglot-codelens--fetch-codelens))
       (eglot-codelens--cleanup-buffer)))
    (t
     (eglot-codelens--cleanup-buffer))))
