@@ -1,4 +1,4 @@
-# eglot-codelens.el (WIP)
+# eglot-codelens.el
 
 CodeLens support for Eglot, displaying LSP CodeLens information as overlays above code.
 
