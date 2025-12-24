@@ -554,7 +554,7 @@ If there are multiple, show a selection menu for user to choose."
     ;; If there's already a timer, just reset its time
     (if (timerp eglot-codelens--refresh-timer)
         ;; Reset existing timer's time
-        (timer-set-idle-time eglot-codelens--refresh-timer eglot-codelens-visible-refresh-delay)
+        (timer-set-time eglot-codelens--refresh-timer eglot-codelens-visible-refresh-delay)
       ;; Create new timer if none exists
       (setq eglot-codelens--refresh-timer
             (run-with-idle-timer
@@ -575,7 +575,7 @@ If there are multiple, show a selection menu for user to choose."
     ;; If there's already a timer, just reset its time instead of canceling and recreating
     (if (timerp eglot-codelens--update-timer)
         ;; Reset existing timer's time
-        (timer-set-idle-time eglot-codelens--update-timer eglot-codelens-update-delay)
+        (timer-set-time eglot-codelens--update-timer eglot-codelens-update-delay)
       ;; Create new timer if none exists
       (setq eglot-codelens--update-timer
             (run-with-idle-timer
