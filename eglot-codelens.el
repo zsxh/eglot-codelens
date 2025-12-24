@@ -67,6 +67,13 @@
   :type 'float
   :group 'eglot-codelens)
 
+(defcustom eglot-codelens-resolve-delay 0.25
+  "Delay in seconds between processing each CodeLens resolve request.
+This controls the rate at which pending resolve requests are processed
+to avoid overwhelming the LSP server."
+  :type 'float
+  :group 'eglot-codelens)
+
 ;;; Faces
 
 (defface eglot-codelens-face
@@ -99,6 +106,14 @@ Each value is a SORTED list of CODELENS-OVERLAY-CELL where CODELENS-OVERLAY-CELL
   "List of line numbers with pending CodeLens to be rendered.
 This is used to track which lines need processing during partial updates.")
 
+(defvar-local eglot-codelens--resolve-queue nil
+  "Queue of pending CodeLens resolve requests.
+Each element is (DOCVER . CODELENS-CELL) where CODELENS-CELL is (CODELENS . OVERLAY).
+This is used to batch resolve requests with debouncing.")
+
+(defvar-local eglot-codelens--resolve-timer nil
+  "Timer for processing CodeLens resolve queue.")
+
 (defun eglot-codelens--build-cache (codelens-list)
   "Build cache from CODELENS-LIST.
 Returns a hash table with line numbers as keys.
@@ -124,12 +139,12 @@ Each value is a sorted list of CODELENS-OVERLAY-CELL where CODELENS-OVERLAY-CELL
   "Resolve CODELENS-CELL and update its overlay.
 Makes an async request to :codeLens/resolve.
 CODELENS-CELL is a cons cell (CODELENS . OVERLAY)."
-  (let* ((codelens (car codelens-cell))
-         (ov (cdr codelens-cell))
-         (buf (current-buffer))
-         (docver (overlay-get ov 'eglot-codelens-docver))
-         (server (eglot-current-server)))
-    (when (and server (eglot-server-capable :codeLensProvider :resolveProvider))
+  (when-let* ((codelens (car codelens-cell))
+              (ov (cdr codelens-cell))
+              (buf (current-buffer))
+              (server (eglot-current-server)))
+    (when (and server (eglot-server-capable :codeLensProvider :resolveProvider)
+               codelens (overlayp ov) (overlay-buffer ov))
       (eglot--async-request
        server :codeLens/resolve codelens
        :success-fn (lambda (resolved)
@@ -137,6 +152,40 @@ CODELENS-CELL is a cons cell (CODELENS . OVERLAY)."
                        (with-current-buffer buf
                          (eglot-codelens--update-resolved-codelens codelens-cell resolved))))
        :hint :codeLens/resolve))))
+
+(defun eglot-codelens--resolve-schedule ()
+  "Schedule processing of the CodeLens resolve queue.
+Starts processing the queue immediately and sets up a timer to pace
+subsequent requests at `eglot-codelens-resolve-delay' intervals.
+If a timer is already running, does nothing (prevents duplicate scheduling)."
+  (unless (and eglot-codelens--resolve-timer
+               (timerp eglot-codelens--resolve-timer))
+    (eglot-codelens--resolve-process-queue)
+    (setq eglot-codelens--resolve-timer
+          (run-with-timer
+           eglot-codelens-resolve-delay nil
+           (lambda (buf)
+             (when (buffer-live-p buf)
+               (with-current-buffer buf
+                 (when eglot-codelens--resolve-timer
+                   (cancel-timer eglot-codelens--resolve-timer))
+                 (setq eglot-codelens--resolve-timer nil)
+                 (when eglot-codelens--resolve-queue
+                   (eglot-codelens--resolve-schedule)))))
+           (current-buffer)))))
+
+(defun eglot-codelens--resolve-process-queue ()
+  "Process one item from the resolve queue.
+Each item is (DOCVER . CODELENS-CELL) where CODELENS-CELL is (CODELENS . OVERLAY)."
+  (when eglot-codelens--resolve-queue
+    ;; Remove outdated items
+    (cl-delete-if (lambda (e)
+                    (not (eq (car e) eglot-codelens--version)))
+                  eglot-codelens--resolve-queue)
+    ;; Process one item from the queue
+    (let ((queue-item (pop eglot-codelens--resolve-queue)))
+      (when queue-item
+        (eglot-codelens--resolve-codelens (cdr queue-item))))))
 
 (defun eglot-codelens--fetch-codelens ()
   "Fetch CodeLens from server and update display in current buffer.
@@ -308,7 +357,8 @@ Overlays are matched by index position within each line."
     (save-excursion
       ;; Step 1: Process pending lines
       (let ((lines-to-process pending-lines)
-            (lines-processed nil))
+            (lines-processed nil)
+            (resolve-queue nil))
         (dolist (line lines-to-process)
           (let* ((new-sorted (gethash line new-cache)))
             (when new-sorted
@@ -326,6 +376,7 @@ Overlays are matched by index position within each line."
 
                 ;; Process each CodeLens by index
                 (cl-loop for new-cell in new-sorted
+                         for codelens = (car new-cell)
                          for new-ov = (cdr new-cell)
                          for index from 0
                          for old-cell = (when old-sorted
@@ -333,6 +384,7 @@ Overlays are matched by index position within each line."
                          for old-ov = (when old-cell
                                         (cdr old-cell))
                          do
+                         ;; 1) Handle overlays
                          (cond
                           ;; Within range: update/create overlay with new codelens data
                           (in-range-p
@@ -368,7 +420,12 @@ Overlays are matched by index position within each line."
                           ;; Outside range: reuse overlay from old-cache, only update usever
                           ((and old-ov (overlayp old-ov) (overlay-buffer old-ov))
                            (overlay-put old-ov 'eglot-codelens-usever docver)
-                           (setcdr new-cell old-ov))))
+                           (setcdr new-cell old-ov)))
+
+                         ;; 2) Check if codelens needs to be resolved
+                         (when (and in-range-p
+                                    (not (plist-get codelens :command)))
+                           (push (cons docver new-cell) resolve-queue)))
 
                 ;; Track this line as processed if in range
                 (when in-range-p
@@ -386,7 +443,13 @@ Overlays are matched by index position within each line."
           (setq eglot-codelens--pending-lines
                 (cl-loop for line in eglot-codelens--pending-lines
                          unless (memq line lines-processed)
-                         collect line)))))))
+                         collect line)))
+
+        ;; Step 4: Add resolve-queue items to global queue and schedule
+        (when resolve-queue
+          (setq eglot-codelens--resolve-queue
+                (append eglot-codelens--resolve-queue (nreverse resolve-queue)))
+          (eglot-codelens--resolve-schedule))))))
 
 ;;; Interaction Handling
 (defun eglot-codelens-execute-or-resolve (codelens-cell)
@@ -419,10 +482,10 @@ If there are multiple, show a selection menu for user to choose."
                                    collect (cons (format "[%d] %s" index (eglot-codelens--format-text codelens))
                                                  codelens-cell)))
                  (vertico-sort-function nil) ;; No sorting if using vertico
-                 (selected-cell (cdr (assoc (completing-read "Select CodeLens: " choices) choices))))
+                 (selected-cell (cdr (assoc (completing-read (format "CodeLens (L%d): " line) choices) choices))))
             (when selected-cell
               (eglot-codelens-execute-or-resolve selected-cell))))
-      (message "No CodeLens found at this line."))))
+      (message (format "No CodeLens found at line %d." line)))))
 
 ;;; Eglot Integration
 
@@ -449,14 +512,19 @@ If there are multiple, show a selection menu for user to choose."
   (when eglot-codelens--refresh-timer
     (cancel-timer eglot-codelens--refresh-timer)
     (setq eglot-codelens--refresh-timer nil))
+  ;; Cancel any pending resolve timer
+  (when eglot-codelens--resolve-timer
+    (cancel-timer eglot-codelens--resolve-timer)
+    (setq eglot-codelens--resolve-timer nil))
 
   ;; Remove all overlays
   (eglot-codelens--cleanup-overlays)
 
-  ;; Clear cache and version
+  ;; Clear cache, version, and queues
   (setq eglot-codelens--cache nil
         eglot-codelens--version nil
-        eglot-codelens--pending-lines nil)
+        eglot-codelens--pending-lines nil
+        eglot-codelens--resolve-queue nil)
 
   ;; Remove Eglot document change hook
   (remove-hook 'eglot--document-changed-hook #'eglot-codelens--on-document-change t)
