@@ -6,7 +6,7 @@
 ;; Author: Zxsh Chen <bnbvbchen@gmail.com>
 ;; URL: https://github.com/zsxh/eglot-codelens
 ;; Keywords: eglot, codelens, tools
-;; Package-Requires: ((emacs "26.3") (eglot "1.19"))
+;; Package-Requires: ((emacs "30.0") (eglot "1.19"))
 
 ;; This file is not part of GNU Emacs.
 
@@ -490,6 +490,7 @@ CODELENS-CELL is a cons cell (CODELENS . OVERLAY)."
      (t
       (message "CodeLens command not available")))))
 
+;;;###autoload
 (defun eglot-codelens-execute-at-line ()
   "Execute CodeLens at current line.
 If there's only one CodeLens, execute it directly.
@@ -612,15 +613,12 @@ Returns a cons cell (BEG-LINE . END-LINE) representing line numbers."
   (let* ((beg (window-start))
          (end (window-end nil t))
          (beg-line (line-number-at-pos beg))
-         (end-line (line-number-at-pos end))
-         (extend-beg-line (if extend-lines
-                              (max 1 (- beg-line extend-lines))
-                            beg-line))
-         (extend-end-line (if extend-lines
-                              (min (line-number-at-pos (point-max))
-                                   (+ end-line extend-lines))
-                            end-line)))
-    (cons extend-beg-line extend-end-line)))
+         (end-line (line-number-at-pos end)))
+    (if (and extend-lines (integerp extend-lines) (> extend-lines 0))
+        (cons (max 1 (- beg-line extend-lines))
+              (min (line-number-at-pos (point-max))
+                   (+ end-line extend-lines)))
+      (cons beg-line end-line))))
 
 (defun eglot-codelens--refresh-visible-area ()
   "Refresh CodeLens overlays in visible window area using existing cache.
