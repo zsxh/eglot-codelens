@@ -254,13 +254,21 @@ CODELENS-CELL is a cons cell (CODELENS . OVERLAY).
 DOCVER is the document version for tracking overlay validity.
 Returns the created overlay."
   (let* ((ov (make-overlay line-start line-start)))
+
     ;; Priority increases: 0, 1, 2... matching LSP return order
     (overlay-put ov 'priority index)
 
     ;; Add identification for cleanup and store data
     (overlay-put ov 'eglot-codelens t)
+
+    ;; Document version for which this overlay displays content.
+    ;; Used to verify the overlay's display data is still current with the document.
     (overlay-put ov 'eglot-codelens-docver docver)
+
+    ;; Cache version tracking whether this overlay is still referenced in the current cache.
+    ;; Used for cleanup - overlays not referenced in the new cache iteration are deleted.
     (overlay-put ov 'eglot-codelens-usever docver)
+
     (when-let* ((codelens (car codelens-cell))
                 (command (plist-get codelens :command)))
       (overlay-put ov 'eglot-codelens-command command))
@@ -402,7 +410,8 @@ Overlays are matched by index position within each line."
                                              new-cell
                                              line-start
                                              index
-                                             total-on-line))))
+                                             total-on-line))
+                               (overlay-put new-ov 'eglot-codelens-docver docver)))
 
                             ;; reuse and update existing overlay from old-cache
                             ((and old-ov (overlayp old-ov) (overlay-buffer old-ov))
@@ -424,8 +433,8 @@ Overlays are matched by index position within each line."
 
                           ;; Outside range: reuse overlay from old-cache, only update usever
                           ((and old-ov (overlayp old-ov) (overlay-buffer old-ov))
-                           (overlay-put old-ov 'eglot-codelens-usever docver)
-                           (setcdr new-cell old-ov)))
+                           (setcdr new-cell old-ov)
+                           (overlay-put old-ov 'eglot-codelens-usever docver)))
 
                          ;; 2) Check if codelens needs to be resolved
                          (when (and in-range-p
@@ -467,13 +476,19 @@ CODELENS-CELL is a cons cell (CODELENS . OVERLAY)."
          (codelens-command (plist-get codelens :command))
          (overlay-command (when (and ov (overlayp ov) (overlay-buffer ov))
                             (overlay-get ov 'eglot-codelens-command)))
-         (command (or codelens-command overlay-command)))
-    ;; Execute resolved command
-    (when command
+         (command (or codelens-command overlay-command))
+         (server (eglot-current-server)))
+    (cond
+     ;; Execute resolved command
+     (command
       (eglot-execute (eglot--current-server-or-lose) command))
-    ;; Resolve command and update overlay if needed
-    (unless codelens-command
-      (eglot-codelens--resolve-codelens codelens-cell))))
+     ;; Try to resolve if server supports resolve provider
+     ((and server (eglot-server-capable :codeLensProvider :resolveProvider))
+      (eglot-codelens--resolve-codelens codelens-cell)
+      (message "Resolving CodeLens command..."))
+     ;; No command available and server doesn't support resolve
+     (t
+      (message "CodeLens command not available")))))
 
 (defun eglot-codelens-execute-at-line ()
   "Execute CodeLens at current line.
