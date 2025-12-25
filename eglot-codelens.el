@@ -6,7 +6,7 @@
 ;; Author: Zxsh Chen <bnbvbchen@gmail.com>
 ;; URL: https://github.com/zsxh/eglot-codelens
 ;; Keywords: eglot, codelens, tools
-;; Package-Requires: ((emacs "30.0") (eglot "1.19"))
+;; Package-Requires: ((emacs "29.1") (eglot "1.19"))
 
 ;; This file is not part of GNU Emacs.
 
