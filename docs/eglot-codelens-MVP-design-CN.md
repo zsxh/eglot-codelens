@@ -1,6 +1,8 @@
-# Eglot-CodeLens 设计文档
+# Eglot-CodeLens MVP 设计文档
 
 **版本: v0.2**
+
+> 本文档实现并非最终实现，仅为初始阶段与 ai 讨论的归档记录
 
 ## 项目概述
 
