@@ -306,9 +306,9 @@ CODELENS-CELL is a cons cell (CODELENS . OVERLAY)."
   (let* ((codelens (car codelens-cell))
          (ov (cdr codelens-cell))
          (command (or (plist-get codelens :command)
-                      (when (and ov (overlayp ov) (overlay-buffer ov))
-                        (overlay-get ov 'eglot-codelens-command))))
-         (title (when command (plist-get command :title))))
+                      (and ov (overlayp ov) (overlay-buffer ov)
+                           (overlay-get ov 'eglot-codelens-command))))
+         (title (when (listp command) (plist-get command :title))))
     (if title
         (eglot-codelens--codicons-to-nerd-icons title)
       "Loading...")))
@@ -368,17 +368,18 @@ Overlays are matched by index position within each line."
   (with-silent-modifications
     (save-excursion
       ;; Step 1: Process pending lines
-      (let ((lines-to-process pending-lines)
+      (let ((lines-to-process (sort pending-lines #'<))
+            (current-line 1)
             (lines-processed nil)
             (resolve-queue nil))
+        (goto-char (point-min))
         (dolist (line lines-to-process)
-          (let* ((new-sorted (gethash line new-cache)))
+          (forward-line (- line current-line))
+          (setq current-line line)
+          (let* ((line-start (point))
+                 (new-sorted (gethash line new-cache)))
             (when new-sorted
-              (let* ((line-start (progn
-                                   (goto-char (point-min))
-                                   (forward-line (1- line))
-                                   (line-beginning-position)))
-                     (in-range-p (or (not range)
+              (let* ((in-range-p (or (not range)
                                      (and (>= line (car range))
                                           (<= line (cdr range)))))
                      (total-on-line (length new-sorted))
@@ -551,6 +552,7 @@ If there are multiple, show a selection menu for user to choose."
   (eglot-codelens--cleanup-overlays)
 
   ;; Clear cache, version, and queues
+  (clrhash eglot-codelens--cache)
   (setq eglot-codelens--cache nil
         eglot-codelens--version nil
         eglot-codelens--pending-lines nil
@@ -605,18 +607,23 @@ If there are multiple, show a selection menu for user to choose."
              (current-buffer))))))
 
 (defun eglot-codelens--visible-range (&optional extend-lines)
-  "Calculate the visible range with optional extension.
-EXTEND-LINES is the number of lines to extend beyond the visible area
-both before and after.  If nil or not provided, returns the exact visible range.
-Returns a cons cell (BEG-LINE . END-LINE) representing line numbers."
+  "Calculate the visible range of the current window, with optional extension.
+When EXTEND-LINES is a positive integer, extend the range by that many lines
+in both directions.
+
+Returns a cons cell (BEG-LINE . END-LINE).
+
+Note that END-LINE may exceed the actual buffer size; this is intentional as
+gethash will safely return nil for non-existent lines during filtering."
   (let* ((beg (window-start))
          (end (window-end nil t))
          (beg-line (line-number-at-pos beg))
          (end-line (line-number-at-pos end)))
-    (if (and extend-lines (integerp extend-lines) (> extend-lines 0))
+    (if (and extend-lines (integerp extend-lines))
         (cons (max 1 (- beg-line extend-lines))
-              (min (line-number-at-pos (point-max))
-                   (+ end-line extend-lines)))
+              ;; Overflow is safe here,
+              ;; gethash handles non-existent keys gracefully.
+              (+ end-line extend-lines))
       (cons beg-line end-line))))
 
 (defun eglot-codelens--refresh-visible-area ()
