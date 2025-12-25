@@ -129,8 +129,8 @@ Each value is a sorted list of CODELENS-OVERLAY-CELL where CODELENS-OVERLAY-CELL
                do (push (cons codelens nil) (gethash line line-groups)))
 
       ;; Reverse each list to maintain LSP order (sorted by index)
-      (maphash (lambda (_line codelens-on-line)
-                 (puthash _line (nreverse codelens-on-line) line-groups))
+      (maphash (lambda (line codelens-on-line)
+                 (puthash line (nreverse codelens-on-line) line-groups))
                line-groups)
       line-groups)))
 
