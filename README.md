@@ -21,7 +21,7 @@ CodeLens support for Eglot, displaying LSP CodeLens information as overlays abov
 
 - Emacs 30+
 - Eglot 1.19+
-- [nerd-icons](https://github.com/emacs-vs/nerd-icons) (optional, for VS Code icon conversion)
+- [nerd-icons](https://github.com/rainstormstudio/nerd-icons.el) (optional, for VS Code icon conversion)
 
 ## Installation
 
@@ -61,7 +61,7 @@ M-x eglot-codelens-execute-at-line
 
 ```elisp
 ;; Delay before updating CodeLens after document changes (default: 0.5s)
-(setq eglot-codelens-update-delay 0.3)
+(setq eglot-codelens-update-delay 0.5)
 
 ;; Delay before refreshing visible CodeLens after window changes (default: 0.25s)
 ;; Applies to scroll events and window configuration changes
