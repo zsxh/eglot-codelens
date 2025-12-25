@@ -6,7 +6,7 @@
 ;; Author: Zxsh Chen <bnbvbchen@gmail.com>
 ;; URL: https://github.com/zsxh/eglot-codelens
 ;; Keywords: eglot, codelens, tools
-;; Package-Requires: ((emacs "29.1") (eglot "1.19"))
+;; Package-Requires: ((emacs "30.1") (eglot "1.19"))
 
 ;; This file is not part of GNU Emacs.
 
@@ -30,7 +30,7 @@
 ;; code and supports user interaction through mouse clicks and keyboard.
 ;;
 ;; Usage:
-;; Simply enable eglot-codelens-mode in buffers managed by Eglot. The mode
+;; Simply enable eglot-codelens-mode in buffers managed by Eglot.  The mode
 ;; will be automatically enabled when Eglot connects to a server that supports
 ;; CodeLens functionality.
 ;;
@@ -226,8 +226,7 @@ for later visible-area refreshes."
 (defun eglot-codelens--build-display-string (codelens-cell line-start index total-codelens)
   "Build display string for CODELENS-CELL at LINE-START with INDEX and TOTAL-CODELENS.
 CODELENS-CELL is a cons cell (CODELENS . OVERLAY)."
-  (let* ((codelens (car codelens-cell))
-         (is-first (= index 0))
+  (let* ((is-first (= index 0))
          (is-last (= index (1- total-codelens)))
          (indentation (if is-first
                           (save-excursion
@@ -291,7 +290,7 @@ If the icon is not recognized, returns the original placeholder."
          (let* ((icon-name (match-string 1 match))
                 (nerd-icon-name (replace-regexp-in-string "-" "_" icon-name))
                 (icon-code (format "nf-cod-%s" nerd-icon-name)))
-           (condition-case err
+           (condition-case _
                (nerd-icons-codicon icon-code)
              (error
               ;; If nerd-icons-codicon fails, return the original placeholder
@@ -360,8 +359,8 @@ Optional argument OLD-CACHE is the previous cache for overlay reuse.
 When provided, existing overlays are reused where possible.
 
 Optional argument RANGE is a cons cell (BEG-LINE . END-LINE) specifying the line
-number range to render. When provided, only CodeLens within this line range
-are updated. Existing overlays in the range that already have DOCVER
+number range to render.  When provided, only CodeLens within this line range
+are updated.  Existing overlays in the range that already have DOCVER
 are preserved unchanged.
 
 This function efficiently updates overlays.
@@ -608,7 +607,7 @@ If there are multiple, show a selection menu for user to choose."
 (defun eglot-codelens--visible-range (&optional extend-lines)
   "Calculate the visible range with optional extension.
 EXTEND-LINES is the number of lines to extend beyond the visible area
-both before and after. If nil or not provided, returns the exact visible range.
+both before and after.  If nil or not provided, returns the exact visible range.
 Returns a cons cell (BEG-LINE . END-LINE) representing line numbers."
   (let* ((beg (window-start))
          (end (window-end nil t))

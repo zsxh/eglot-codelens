@@ -1,0 +1,29 @@
+name: Lint
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Emacs
+        uses: jcs090218/setup-emacs@master
+        with:
+          version: '30.2'
+
+      - name: Check documentation (checkdoc)
+        run: make checkdoc
+
+      - name: Check package compliance (package-lint)
+        run: make package-lint
+
+      - name: Byte compile check
+        run: make compile

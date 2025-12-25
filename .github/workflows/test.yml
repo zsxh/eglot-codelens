@@ -14,10 +14,6 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest]
         emacs-version:
-          - '29.1'
-          - '29.2'
-          - '29.3'
-          - '29.4'
           - '30.1'
           - '30.2'
 
