@@ -19,8 +19,8 @@ CodeLens support for Eglot, displaying LSP CodeLens information as overlays abov
 
 ## Requirements
 
-- Emacs 30+
-- Eglot 1.19+
+- Emacs 29+
+- Eglot 1.17+
 - [nerd-icons](https://github.com/rainstormstudio/nerd-icons.el) (optional, for VS Code icon conversion)
 
 ## Installation
