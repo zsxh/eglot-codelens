@@ -518,14 +518,16 @@ Optional COMMAND provides the command plist."
   (setq eglot-codelens--cache nil
         eglot-codelens--version nil
         eglot-codelens--pending-lines nil
-        eglot-codelens--resolve-queue nil))
+        eglot-codelens--resolve-queue nil
+        eglot-codelens--overlays nil))
 
 (defun eglot-codelens-test-teardown ()
   "Teardown function run after each test."
   (setq eglot-codelens--cache nil
         eglot-codelens--version nil
         eglot-codelens--pending-lines nil
-        eglot-codelens--resolve-queue nil))
+        eglot-codelens--resolve-queue nil
+        eglot-codelens--overlays nil))
 
 ;; Note: Setup and teardown is handled per-test in ert-deftest forms
 ;; Individual tests reset state as needed

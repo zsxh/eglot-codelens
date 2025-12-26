@@ -6,7 +6,7 @@
 ;; Author: Zxsh Chen <bnbvbchen@gmail.com>
 ;; URL: https://github.com/zsxh/eglot-codelens
 ;; Keywords: eglot, codelens, tools
-;; Package-Requires: ((emacs "30.1") (eglot "1.19"))
+;; Package-Requires: ((emacs "30.1") (eglot "1.19") (jsonrpc "1.0.26"))
 
 ;; This file is not part of GNU Emacs.
 
@@ -40,8 +40,9 @@
 ;;
 ;;   (add-hook 'eglot-managed-mode-hook #'eglot-codelens-mode)
 ;;
-;; The package integrates with Eglot's extension mechanism and doesn't
-;; interfere with Eglot's core functionality.
+;; NOTE: This extension relies on some eglot--internal symbols
+;; (eglot--versioned-identifier, eglot--TextDocumentIdentifier, etc).
+
 
 ;;; Code:
 
@@ -115,18 +116,26 @@ This is used to batch resolve requests with debouncing.")
 (defvar-local eglot-codelens--resolve-timer nil
   "Timer for processing CodeLens resolve queue.")
 
+(defvar-local eglot-codelens--overlays nil
+  "List of all CodeLens overlays in current buffer.
+This is used to efficiently clean up stale overlays without traversing
+the entire buffer's overlay list.")
+
 (defun eglot-codelens--build-cache (codelens-list)
   "Build cache from CODELENS-LIST.
 Returns a hash table with line numbers as keys.
 Each value is a sorted list of CODELENS-OVERLAY-CELL where CODELENS-OVERLAY-CELL is (CODELENS . OVERLAY)."
-  (when codelens-list
+  (when (and codelens-list (vectorp codelens-list))
     (let ((line-groups (make-hash-table :test 'eq)))
       ;; Group CodeLens by line number
       (cl-loop for codelens across codelens-list
+               when (and (listp codelens) (plist-get codelens :range))
                for range = (plist-get codelens :range)
+               for start = (when range (plist-get range :start))
+               for line-num = (when start (plist-get start :line))
+               when (and (integerp line-num) (>= line-num 0))
                ;; Position in a text document expressed as zero-based line and zero-based character offset.
-               for line = (1+ (plist-get (plist-get range :start) :line))
-               do (push (cons codelens nil) (gethash line line-groups)))
+               do (push (cons codelens nil) (gethash (1+ line-num) line-groups)))
 
       ;; Reverse each list to maintain LSP order (sorted by index)
       (maphash (lambda (line codelens-on-line)
@@ -146,13 +155,13 @@ CODELENS-CELL is a cons cell (CODELENS . OVERLAY)."
               (server (eglot-current-server)))
     (when (and server (eglot-server-capable :codeLensProvider :resolveProvider)
                codelens (overlayp ov) (overlay-buffer ov))
-      (eglot--async-request
+      (jsonrpc-async-request
        server :codeLens/resolve codelens
        :success-fn (lambda (resolved)
                      (when (buffer-live-p buf)
                        (with-current-buffer buf
                          (eglot-codelens--update-resolved-codelens codelens-cell resolved))))
-       :hint :codeLens/resolve))))
+       :deferred :codeLens/resolve))))
 
 (defun eglot-codelens--resolve-schedule ()
   "Schedule processing of the CodeLens resolve queue.
@@ -180,9 +189,10 @@ If a timer is already running, does nothing (prevents duplicate scheduling)."
 Each item is (DOCVER . CODELENS-CELL) where CODELENS-CELL is (CODELENS . OVERLAY)."
   (when eglot-codelens--resolve-queue
     ;; Remove outdated items
-    (cl-delete-if (lambda (e)
-                    (not (eq (car e) eglot-codelens--version)))
-                  eglot-codelens--resolve-queue)
+    (setq eglot-codelens--resolve-queue
+          (cl-delete-if (lambda (e)
+                          (not (eq (car e) eglot-codelens--version)))
+                        eglot-codelens--resolve-queue))
     ;; Process one item from the queue
     (let ((queue-item (pop eglot-codelens--resolve-queue)))
       (when queue-item
@@ -196,7 +206,7 @@ for later visible-area refreshes."
   (when-let* ((server (eglot-current-server))
               (docver eglot--versioned-identifier)
               (buf (current-buffer)))
-    (eglot--async-request
+    (jsonrpc-async-request
      server
      :textDocument/codeLens (list :textDocument (eglot--TextDocumentIdentifier))
      :success-fn (lambda (codelens-list)
@@ -209,17 +219,18 @@ for later visible-area refreshes."
                                (new-cache (eglot-codelens--build-cache codelens-list))
                                (range (eglot-codelens--visible-range))
                                all-lines)
-                           ;; Initialize pending-lines with all lines from new cache
+
                            (when new-cache
                              (maphash (lambda (line _) (push line all-lines)) new-cache))
-                           ;; Reuse existing overlays for optimal performance
-                           ;; Pass pending-lines to track which lines need processing
-                           (eglot-codelens--render-codelens
-                            new-cache docver all-lines old-cache range)
+
+                           ;; Initialize pending-lines with all lines from new cache
                            (setq eglot-codelens--cache new-cache
                                  eglot-codelens--version docver
-                                 eglot-codelens--pending-lines all-lines))))))
-     :hint :textDocument/codeLens)))
+                                 eglot-codelens--pending-lines all-lines)
+
+                           (eglot-codelens--render-codelens
+                            new-cache docver all-lines old-cache range))))))
+     :deferred :textDocument/codeLens)))
 
 ;;; UI Display System
 
@@ -276,7 +287,12 @@ Returns the created overlay."
     (overlay-put ov 'before-string
                  (eglot-codelens--build-display-string
                   codelens-cell line-start index total-codelens))
+
+    ;; Register overlay in tracking list
+    (push ov eglot-codelens--overlays)
     ov))
+
+(declare-function nerd-icons-codicon "nerd-icons" (icon-name &rest _args))
 
 (defun eglot-codelens--codicons-to-nerd-icons (title)
   "Convert VS Code icon placeholders in TITLE to nerd icons.
@@ -446,11 +462,15 @@ Overlays are matched by index position within each line."
                   (push line lines-processed))))))
 
         ;; Step 2: Delete overlays with old usever (entire buffer)
+        ;; Use tracked overlay list for efficient iteration
         (when old-cache
-          (dolist (ov (overlays-in (point-min) (point-max)))
-            (when (and (overlay-get ov 'eglot-codelens)
-                       (not (eq (overlay-get ov 'eglot-codelens-usever) docver)))
-              (delete-overlay ov))))
+          (let ((retained nil))
+            (dolist (ov eglot-codelens--overlays)
+              (if (and (overlayp ov) (overlay-buffer ov)
+                       (eq (overlay-get ov 'eglot-codelens-usever) docver))
+                  (push ov retained)
+                (delete-overlay ov)))
+            (setq eglot-codelens--overlays retained)))
 
         ;; Step 3: Update pending-lines cache (remove processed lines)
         (when lines-processed
@@ -525,7 +545,8 @@ If there are multiple, show a selection menu for user to choose."
   (when eglot-codelens-mode
     ;; Initialize buffer-local variables
     (setq eglot-codelens--cache nil
-          eglot-codelens--version nil)
+          eglot-codelens--version nil
+          eglot-codelens--overlays nil)
     ;; Add Eglot document change hook
     (add-hook 'eglot--document-changed-hook #'eglot-codelens--on-document-change nil t)
     ;; Add window scroll hook for visible area refresh
@@ -551,12 +572,14 @@ If there are multiple, show a selection menu for user to choose."
   ;; Remove all overlays
   (eglot-codelens--cleanup-overlays)
 
-  ;; Clear cache, version, and queues
-  (clrhash eglot-codelens--cache)
+  ;; Clear cache, version, queues, and overlay tracking
+  (when (hash-table-p eglot-codelens--cache)
+    (clrhash eglot-codelens--cache))
   (setq eglot-codelens--cache nil
         eglot-codelens--version nil
         eglot-codelens--pending-lines nil
-        eglot-codelens--resolve-queue nil)
+        eglot-codelens--resolve-queue nil
+        eglot-codelens--overlays nil)
 
   ;; Remove Eglot document change hook
   (remove-hook 'eglot--document-changed-hook #'eglot-codelens--on-document-change t)
@@ -571,7 +594,7 @@ If there are multiple, show a selection menu for user to choose."
     ;; If there's already a timer, just reset its time
     (if (timerp eglot-codelens--refresh-timer)
         ;; Reset existing timer's time
-        (timer-set-time eglot-codelens--refresh-timer eglot-codelens-visible-refresh-delay)
+        (timer-set-idle-time eglot-codelens--refresh-timer eglot-codelens-visible-refresh-delay)
       ;; Create new timer if none exists
       (setq eglot-codelens--refresh-timer
             (run-with-idle-timer
@@ -592,7 +615,7 @@ If there are multiple, show a selection menu for user to choose."
     ;; If there's already a timer, just reset its time instead of canceling and recreating
     (if (timerp eglot-codelens--update-timer)
         ;; Reset existing timer's time
-        (timer-set-time eglot-codelens--update-timer eglot-codelens-update-delay)
+        (timer-set-idle-time eglot-codelens--update-timer eglot-codelens-update-delay)
       ;; Create new timer if none exists
       (setq eglot-codelens--update-timer
             (run-with-idle-timer
@@ -607,14 +630,15 @@ If there are multiple, show a selection menu for user to choose."
              (current-buffer))))))
 
 (defun eglot-codelens--visible-range (&optional extend-lines)
-  "Calculate the visible range of the current window, with optional extension.
-When EXTEND-LINES is a positive integer, extend the range by that many lines
-in both directions.
+  "Calculate the visible line range of the current window, with optional extension.
 
-Returns a cons cell (BEG-LINE . END-LINE).
+EXTEND-LINES, when a positive integer, extends the range by that many
+lines in both directions (useful for pre-fetching).
 
-Note that END-LINE may exceed the actual buffer size; this is intentional as
-gethash will safely return nil for non-existent lines during filtering."
+Return a cons cell (BEG-LINE . END-LINE) where both are 1-based line numbers.
+END-LINE may exceed the buffer's actual line count.
+
+This function requires a selected window with a valid buffer."
   (let* ((beg (window-start))
          (end (window-end nil t))
          (beg-line (line-number-at-pos beg))
@@ -653,7 +677,9 @@ without re-fetching CodeLens from the server."
   :group 'eglot-codelens
   (cond
    (eglot-codelens-mode
-    (if (and eglot--managed-mode (eglot-server-capable :codeLensProvider))
+    (if (and (bound-and-true-p eglot--managed-mode)
+             (eglot-current-server)
+             (eglot-server-capable :codeLensProvider))
         (progn
           (eglot-codelens--setup-buffer)
           (eglot-codelens--fetch-codelens))
