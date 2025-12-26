@@ -17,7 +17,7 @@
 (source "melpa")
 
 ;; Emacs version requirement
-(depends-on "emacs" "29.1")
+(depends-on "emacs" "30.1")
 
 ;; Runtime dependencies are specified in the package file,
 ;; but we can also declare them here for clarity
