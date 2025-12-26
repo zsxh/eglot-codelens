@@ -95,6 +95,10 @@ to avoid overwhelming the LSP server."
 A hash table with line numbers as keys.
 Each value is a SORTED list of CODELENS-OVERLAY-CELL where CODELENS-OVERLAY-CELL is (CODELENS . OVERLAY).")
 
+(defvar-local eglot-codelens--prev-line-count nil
+  "Previous document line count for calculating offset during line changes.
+Used to compute delta when reusing overlays across document edits.")
+
 (defvar-local eglot-codelens--version nil
   "Document version for cached CodeLens.")
 
@@ -384,10 +388,17 @@ Overlays are matched by index position within each line."
   (with-silent-modifications
     (save-excursion
       ;; Step 1: Process pending lines
-      (let ((lines-to-process (sort pending-lines #'<))
-            (current-line 1)
-            (lines-processed nil)
-            (resolve-queue nil))
+      (let* ((lines-to-process (sort pending-lines #'<))
+             (current-line 1)
+             (lines-processed nil)
+             (resolve-queue nil)
+             ;; Calculate line count delta for overlay reuse across edits
+             (line-count (line-number-at-pos (point-max)))
+             (prev-line-count eglot-codelens--prev-line-count)
+             (line-delta (if (and prev-line-count (integerp prev-line-count))
+                             (- line-count prev-line-count)
+                           0))
+             (cursor-line (line-number-at-pos (point))))
         (goto-char (point-min))
         (dolist (line lines-to-process)
           (forward-line (- line current-line))
@@ -400,8 +411,15 @@ Overlays are matched by index position within each line."
                                           (<= line (cdr range)))))
                      (total-on-line (length new-sorted))
                      ;; Find corresponding line group in old cache
+                     ;; Before cursor: assume no change, use line directly
+                     ;; At/After cursor: adjust by delta (lines inserted/deleted)
+                     (lookup-line (when old-cache
+                                    (if (and (/= line-delta 0)
+                                             (>= line cursor-line))
+                                        (- line line-delta)
+                                      line)))
                      (old-sorted (when old-cache
-                                   (gethash line old-cache))))
+                                   (gethash lookup-line old-cache))))
 
                 ;; Process each CodeLens by index
                 (cl-loop for new-cell in new-sorted
@@ -460,6 +478,9 @@ Overlays are matched by index position within each line."
                 ;; Track this line as processed if in range
                 (when in-range-p
                   (push line lines-processed))))))
+
+        ;; Update prev-line-count for next iteration
+        (setq eglot-codelens--prev-line-count line-count)
 
         ;; Step 2: Delete overlays with old usever (entire buffer)
         ;; Use tracked overlay list for efficient iteration
@@ -545,6 +566,7 @@ If there are multiple, show a selection menu for user to choose."
   (when eglot-codelens-mode
     ;; Initialize buffer-local variables
     (setq eglot-codelens--cache nil
+          eglot-codelens--prev-line-count nil
           eglot-codelens--version nil
           eglot-codelens--overlays nil)
     ;; Add Eglot document change hook
@@ -576,6 +598,7 @@ If there are multiple, show a selection menu for user to choose."
   (when (hash-table-p eglot-codelens--cache)
     (clrhash eglot-codelens--cache))
   (setq eglot-codelens--cache nil
+        eglot-codelens--prev-line-count nil
         eglot-codelens--version nil
         eglot-codelens--pending-lines nil
         eglot-codelens--resolve-queue nil
@@ -599,15 +622,16 @@ If there are multiple, show a selection menu for user to choose."
       (setq eglot-codelens--refresh-timer
             (run-with-idle-timer
              eglot-codelens-visible-refresh-delay nil
-             (lambda (buf)
+             (lambda (buf win)
                (when (buffer-live-p buf)
                  (with-current-buffer buf
                    (when (timerp eglot-codelens--refresh-timer)
                      (cancel-timer eglot-codelens--refresh-timer))
                    (setq eglot-codelens--refresh-timer nil)
-                   (when (eq (current-buffer) (window-buffer (selected-window)))
+                   (when (eq (current-buffer) (window-buffer win))
                      (eglot-codelens--refresh-visible-area)))))
-             (current-buffer))))))
+             (current-buffer)
+             (selected-window))))))
 
 (defun eglot-codelens--on-document-change (&rest _args)
   "Handle document changes via Eglot's document-changed hook."

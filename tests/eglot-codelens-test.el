@@ -516,6 +516,7 @@ Optional COMMAND provides the command plist."
 (defun eglot-codelens-test-setup ()
   "Setup function run before each test."
   (setq eglot-codelens--cache nil
+        eglot-codelens--prev-line-count nil
         eglot-codelens--version nil
         eglot-codelens--pending-lines nil
         eglot-codelens--resolve-queue nil
@@ -524,6 +525,7 @@ Optional COMMAND provides the command plist."
 (defun eglot-codelens-test-teardown ()
   "Teardown function run after each test."
   (setq eglot-codelens--cache nil
+        eglot-codelens--prev-line-count nil
         eglot-codelens--version nil
         eglot-codelens--pending-lines nil
         eglot-codelens--resolve-queue nil
@@ -531,6 +533,204 @@ Optional COMMAND provides the command plist."
 
 ;; Note: Setup and teardown is handled per-test in ert-deftest forms
 ;; Individual tests reset state as needed
+
+
+;;; Line Count Delta Tests (Overlay Reuse Optimization)
+
+(ert-deftest eglot-codelens-test-prev-line-count-initialization ()
+  "Test that prev-line-count is initialized on first render."
+  (with-temp-buffer
+    (dotimes (_ 10) (insert "line\n"))
+    (let* ((c1 (eglot-codelens-test--mock-codelens 5 "test"))
+           (codelens (vector c1))
+           (cache (eglot-codelens--build-cache codelens))
+           (docver 1)
+           (initial-line-count (line-number-at-pos (point-max))))
+      (setq eglot-codelens--prev-line-count nil)
+      (cl-letf (((symbol-function 'eglot-codelens--visible-range)
+                 (lambda (&rest _) (cons 1 10))))
+        (eglot-codelens--render-codelens cache docver '(5) nil (cons 1 10))
+        (should (eq eglot-codelens--prev-line-count initial-line-count))))))
+
+(ert-deftest eglot-codelens-test-prev-line-count-update ()
+  "Test that prev-line-count is updated on subsequent renders."
+  (with-temp-buffer
+    (dotimes (_ 10) (insert "line\n"))
+    (let* ((c1 (eglot-codelens-test--mock-codelens 5 "test"))
+           (codelens (vector c1))
+           (cache (eglot-codelens--build-cache codelens))
+           (docver 1)
+           (docver2 2)
+           (initial-line-count (line-number-at-pos (point-max))))
+      (cl-letf (((symbol-function 'eglot-codelens--visible-range)
+                 (lambda (&rest _) (cons 1 10))))
+        ;; First render
+        (eglot-codelens--render-codelens cache docver '(5) nil (cons 1 10))
+        (should (eq eglot-codelens--prev-line-count initial-line-count))
+        ;; Second render with same cache (prev-line-count stays same)
+        (eglot-codelens--render-codelens cache docver2 '(5) cache (cons 1 10))
+        (should (eq eglot-codelens--prev-line-count initial-line-count))))))
+
+(ert-deftest eglot-codelens-test-render-reuse-with-line-insertion ()
+  "Test overlay reuse when lines are inserted before cursor."
+  (with-temp-buffer
+    ;; Start with 10 lines
+    (dotimes (_ 10) (insert "line\n"))
+    (goto-char (point-min))
+    (forward-line 5)  ; Move cursor to line 6
+    (let* ((c1 (eglot-codelens-test--mock-codelens 7 "test"))  ; Line 7 is after cursor
+           (c2 (eglot-codelens-test--mock-codelens 3 "test2")) ; Line 3 is before cursor
+           (c1-new (eglot-codelens-test--mock-codelens 7 "test"))
+           (c2-new (eglot-codelens-test--mock-codelens 3 "test2"))
+           (codelens (vector c1 c2))
+           (codelens-new (vector c1-new c2-new))
+           (old-cache (eglot-codelens--build-cache codelens))
+           (new-cache (eglot-codelens--build-cache codelens-new))
+           (docver-old 1)
+           (docver-new 2)
+           (old-line-count (count-lines (point-min) (point-max))))
+      ;; First render
+      (cl-letf (((symbol-function 'eglot-codelens--visible-range)
+                 (lambda (&rest _) (cons 1 10))))
+        (eglot-codelens--render-codelens old-cache docver-old '(3 7) nil (cons 1 10))
+        (setq eglot-codelens--prev-line-count old-line-count)
+        (let ((count-after-first (eglot-codelens-test--count-codelens-overlays)))
+          (should (= count-after-first 2))
+          ;; Simulate inserting 2 lines (delta = +2)
+          ;; prev-line-count = 8, current = 10, delta = 10 - 8 = 2
+          (setq eglot-codelens--prev-line-count (- old-line-count 2))
+          (eglot-codelens--render-codelens new-cache docver-new '(3 7) old-cache (cons 1 10))
+          ;; Line 3 is before cursor (line 6): lookup line 3 (no delta)
+          ;; Line 7 is after cursor (line 6): lookup line 5 (7 - 2 = 5)
+          ;; Since old cache has line 3 and 7, but we're looking up 3 and 5,
+          ;; only line 3 should find a match
+          (let ((count-after-second (eglot-codelens-test--count-codelens-overlays)))
+            ;; Should still be 2 (one reused, one created)
+            (should (= count-after-second 2))))))))
+
+(ert-deftest eglot-codelens-test-render-reuse-with-line-deletion ()
+  "Test overlay reuse when lines are deleted before cursor."
+  (with-temp-buffer
+    ;; Start with 10 lines
+    (dotimes (_ 10) (insert "line\n"))
+    (goto-char (point-min))
+    (forward-line 5)  ; Move cursor to line 6
+    (let* ((c1 (eglot-codelens-test--mock-codelens 7 "test"))  ; Line 7 is after cursor
+           (c2 (eglot-codelens-test--mock-codelens 3 "test2")) ; Line 3 is before cursor
+           (c1-new (eglot-codelens-test--mock-codelens 7 "test"))
+           (c2-new (eglot-codelens-test--mock-codelens 3 "test2"))
+           (codelens (vector c1 c2))
+           (codelens-new (vector c1-new c2-new))
+           (old-cache (eglot-codelens--build-cache codelens))
+           (new-cache (eglot-codelens--build-cache codelens-new))
+           (docver-old 1)
+           (docver-new 2)
+           (old-line-count (count-lines (point-min) (point-max))))
+      ;; First render
+      (cl-letf (((symbol-function 'eglot-codelens--visible-range)
+                 (lambda (&rest _) (cons 1 10))))
+        (eglot-codelens--render-codelens old-cache docver-old '(3 7) nil (cons 1 10))
+        (setq eglot-codelens--prev-line-count old-line-count)
+        (let ((count-after-first (eglot-codelens-test--count-codelens-overlays)))
+          (should (= count-after-first 2))
+          ;; Simulate deleting 2 lines (delta = -2)
+          ;; prev-line-count = 12, current = 10, delta = 10 - 12 = -2
+          (setq eglot-codelens--prev-line-count (+ old-line-count 2))
+          (eglot-codelens--render-codelens new-cache docver-new '(3 7) old-cache (cons 1 10))
+          ;; Line 3 is before cursor (line 6): lookup line 3 (no delta)
+          ;; Line 7 is after cursor (line 6): lookup line 9 (7 - (-2) = 9)
+          ;; Old cache has line 3 and 7
+          ;; Looking up 3: finds match (before cursor, no delta)
+          ;; Looking up 9: no match (old cache doesn't have line 9)
+          (let ((count-after-second (eglot-codelens-test--count-codelens-overlays)))
+            ;; Should be 2 (one reused, one created)
+            (should (= count-after-second 2))))))))
+
+(ert-deftest eglot-codelens-test-render-cursor-boundary-lookup ()
+  "Test that overlay lookup respects cursor position boundary."
+  (with-temp-buffer
+    (dotimes (_ 15) (insert "line\n"))
+    (goto-char (point-min))
+    (forward-line 7)  ; Move cursor to line 8
+    (let* ((c1 (eglot-codelens-test--mock-codelens 5 "before"))  ; Before cursor
+           (c2 (eglot-codelens-test--mock-codelens 10 "after"))  ; After cursor
+           (c1-new (eglot-codelens-test--mock-codelens 5 "before"))
+           (c2-new (eglot-codelens-test--mock-codelens 10 "after"))
+           (codelens (vector c1 c2))
+           (codelens-new (vector c1-new c2-new))
+           (old-cache (eglot-codelens--build-cache codelens))
+           (new-cache (eglot-codelens--build-cache codelens-new))
+           (docver-old 1)
+           (docver-new 2)
+           (old-line-count (count-lines (point-min) (point-max))))
+      ;; First render
+      (cl-letf (((symbol-function 'eglot-codelens--visible-range)
+                 (lambda (&rest _) (cons 1 15))))
+        (eglot-codelens--render-codelens old-cache docver-old '(5 10) nil (cons 1 15))
+        (setq eglot-codelens--prev-line-count old-line-count)
+        (let ((count-after-first (eglot-codelens-test--count-codelens-overlays)))
+          (should (= count-after-first 2))
+          ;; Simulate inserting 3 lines (delta = +3)
+          (setq eglot-codelens--prev-line-count (- old-line-count 3))
+          ;; Cursor is at line 8
+          ;; Line 5 < cursor 8: lookup line 5 (no delta) - should find match
+          ;; Line 10 >= cursor 8: lookup line 7 (10 - 3 = 7) - no match in old cache
+          (eglot-codelens--render-codelens new-cache docver-new '(5 10) old-cache (cons 1 15))
+          (let ((count-after-second (eglot-codelens-test--count-codelens-overlays)))
+            ;; Should be 2 (line 5 reused, line 10 created new)
+            (should (= count-after-second 2))))))))
+
+(ert-deftest eglot-codelens-test-render-no-delta-same-line-count ()
+  "Test overlay reuse when line count doesn't change (delta = 0)."
+  (with-temp-buffer
+    (dotimes (_ 10) (insert "line\n"))
+    (goto-char (point-min))
+    (forward-line 4)  ; Move cursor to line 5
+    (let* ((c1 (eglot-codelens-test--mock-codelens 2 "before"))
+           (c2 (eglot-codelens-test--mock-codelens 8 "after"))
+           (c1-new (eglot-codelens-test--mock-codelens 2 "before"))
+           (c2-new (eglot-codelens-test--mock-codelens 8 "after"))
+           (codelens (vector c1 c2))
+           (codelens-new (vector c1-new c2-new))
+           (old-cache (eglot-codelens--build-cache codelens))
+           (new-cache (eglot-codelens--build-cache codelens-new))
+           (docver-old 1)
+           (docver-new 2)
+           (old-line-count (count-lines (point-min) (point-max))))
+      ;; First render
+      (cl-letf (((symbol-function 'eglot-codelens--visible-range)
+                 (lambda (&rest _) (cons 1 10))))
+        (eglot-codelens--render-codelens old-cache docver-old '(2 8) nil (cons 1 10))
+        (setq eglot-codelens--prev-line-count old-line-count)
+        (let ((count-after-first (eglot-codelens-test--count-codelens-overlays)))
+          (should (= count-after-first 2))
+          ;; No line count change (delta = 0)
+          ;; With delta = 0, both lines should map directly
+          ;; Line 2 < cursor 5: lookup line 2
+          ;; Line 8 >= cursor 5: lookup line 8
+          ;; Both should find matches in old cache
+          (eglot-codelens--render-codelens new-cache docver-new '(2 8) old-cache (cons 1 10))
+          (let ((count-after-second (eglot-codelens-test--count-codelens-overlays)))
+            ;; Should still be 2 (both reused)
+            (should (= count-after-second 2))))))))
+
+(ert-deftest eglot-codelens-test-cleanup-buffer-clears-prev-line-count ()
+  "Test that cleanup buffer clears prev-line-count."
+  (with-temp-buffer
+    (dotimes (_ 10) (insert "line\n"))
+    (let* ((c1 (eglot-codelens-test--mock-codelens 5 "test"))
+           (codelens (vector c1))
+           (cache (eglot-codelens--build-cache codelens))
+           (docver 1))
+      ;; Set up state (need to be in temp-buffer for buffer-local vars)
+      (setq eglot-codelens--cache cache
+            eglot-codelens--version docver
+            eglot-codelens--prev-line-count 10
+            eglot-codelens--overlays nil)
+      ;; Run cleanup
+      (eglot-codelens--cleanup-buffer)
+      ;; Verify prev-line-count is cleared (in current buffer)
+      (should (null eglot-codelens--prev-line-count)))))
 
 (provide 'eglot-codelens-test)
 
