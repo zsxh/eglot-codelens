@@ -17,10 +17,11 @@
 (source "melpa")
 
 ;; Emacs version requirement
-(depends-on "emacs" "30.1")
+(depends-on "emacs" "29.1")
 
 ;; Runtime dependencies are specified in the package file,
 ;; but we can also declare them here for clarity
+(depends-on "compat" "30.1.0.0")
 (depends-on "eglot" "1.19")
 (depends-on "jsonrpc" "1.0.26")
 
