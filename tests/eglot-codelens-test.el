@@ -78,7 +78,7 @@ Optional COMMAND provides the command plist."
     (forward-line (1- beg-line))
     (let ((beg (point)))
       (goto-char (point-min))
-      (forward-line (min (1- end-line) (1- (line-number-at-pos (point-max)))))
+      (forward-line (min (1- end-line) (1- (line-number-at-pos (point-max) t))))
       (let ((end (point)))
         (let ((count 0))
           (dolist (ov (overlays-in beg end))
@@ -488,7 +488,7 @@ Optional COMMAND provides the command plist."
         ;; Display buffer in a window to test window-dependent functions
         (set-window-buffer (selected-window) (current-buffer))
         ;; Get buffer's actual line count
-        (let* ((buffer-max-line (line-number-at-pos (point-max)))
+        (let* ((buffer-max-line (line-number-at-pos (point-max) t))
                (range-normal (eglot-codelens--visible-range))
                (range-extended (eglot-codelens--visible-range 5)))
           (should (consp range-extended))
@@ -545,7 +545,7 @@ Optional COMMAND provides the command plist."
            (codelens (vector c1))
            (cache (eglot-codelens--build-cache codelens))
            (docver 1)
-           (initial-line-count (line-number-at-pos (point-max))))
+           (initial-line-count (line-number-at-pos (point-max) t)))
       (setq eglot-codelens--prev-line-count nil)
       (cl-letf (((symbol-function 'eglot-codelens--visible-range)
                  (lambda (&rest _) (cons 1 10))))
@@ -561,7 +561,7 @@ Optional COMMAND provides the command plist."
            (cache (eglot-codelens--build-cache codelens))
            (docver 1)
            (docver2 2)
-           (initial-line-count (line-number-at-pos (point-max))))
+           (initial-line-count (line-number-at-pos (point-max) t)))
       (cl-letf (((symbol-function 'eglot-codelens--visible-range)
                  (lambda (&rest _) (cons 1 10))))
         ;; First render

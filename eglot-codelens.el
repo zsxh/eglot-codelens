@@ -355,7 +355,7 @@ RESOLVED is the resolved CodeLens data from the server."
 
       ;; Update the display string
       (let* ((line-start (overlay-start ov))
-             (line (line-number-at-pos line-start))
+             (line (line-number-at-pos line-start t))
              ;; Find line group in cache (hashtable lookup)
              (sorted-codelens (gethash line eglot-codelens--cache))
              (total-on-line (if sorted-codelens
@@ -393,12 +393,12 @@ Overlays are matched by index position within each line."
              (lines-processed nil)
              (resolve-queue nil)
              ;; Calculate line count delta for overlay reuse across edits
-             (line-count (line-number-at-pos (point-max)))
+             (line-count (line-number-at-pos (point-max) t))
              (prev-line-count eglot-codelens--prev-line-count)
              (line-delta (if (and prev-line-count (integerp prev-line-count))
                              (- line-count prev-line-count)
                            0))
-             (cursor-line (line-number-at-pos (point))))
+             (cursor-line (line-number-at-pos (point) t)))
         (goto-char (point-min))
         (dolist (line lines-to-process)
           (forward-line (- line current-line))
@@ -537,7 +537,7 @@ CODELENS-CELL is a cons cell (CODELENS . OVERLAY)."
 If there's only one CodeLens, execute it directly.
 If there are multiple, show a selection menu for user to choose."
   (interactive)
-  (let* ((line (line-number-at-pos))
+  (let* ((line (line-number-at-pos (point) t))
          ;; Get line group from cache (hashtable lookup)
          (sorted-codelens (gethash line eglot-codelens--cache)))
     (if sorted-codelens
@@ -665,8 +665,8 @@ END-LINE may exceed the buffer's actual line count.
 This function requires a selected window with a valid buffer."
   (let* ((beg (window-start))
          (end (window-end nil t))
-         (beg-line (line-number-at-pos beg))
-         (end-line (line-number-at-pos end)))
+         (beg-line (line-number-at-pos beg t))
+         (end-line (line-number-at-pos end t)))
     (if (and extend-lines (integerp extend-lines))
         (cons (max 1 (- beg-line extend-lines))
               ;; Overflow is safe here,
