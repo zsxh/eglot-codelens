@@ -415,7 +415,7 @@ Overlays are matched by index position within each line."
                      ;; At/After cursor: adjust by delta (lines inserted/deleted)
                      (lookup-line (when old-cache
                                     (if (and (/= line-delta 0)
-                                             (>= line cursor-line))
+                                             (> line cursor-line))
                                         (- line line-delta)
                                       line)))
                      (old-sorted (when old-cache

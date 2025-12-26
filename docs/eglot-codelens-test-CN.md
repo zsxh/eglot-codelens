@@ -4,39 +4,32 @@
 
 ## 测试概览
 
-测试套件使用 Emacs 内置的 ERT (Emacs Lisp Regression Testing) 框架编写，共包含 **29 个测试用例**，覆盖以下功能模块：
+测试套件使用 Emacs 内置的 ERT (Emacs Lisp Regression Testing) 框架编写，共包含 **37 个测试用例**，覆盖以下功能模块：
 
-| 模块          | 测试数量 | 说明                                 |
-|---------------|----------|--------------------------------------|
-| 缓存管理      | 5        | CodeLens 缓存的构建、分组和排序      |
-| UI 显示       | 6        | 文本格式化、图标转换、显示字符串     |
-| Overlay 管理  | 3        | Overlay 创建、属性设置、清理         |
-| 渲染系统      | 5        | Overlay 创建/复用/删除、可见范围渲染 |
-| CodeLens 解析 | 3        | 解析队列的处理和清理                 |
-| 交互处理      | 2        | CodeLens 命令执行                    |
-| 辅助函数      | 2        | 可见范围计算和边界检查               |
-| Mock 功能     | 3        | Mock 辅助函数验证                    |
+| 模块             | 测试数量 | 说明                                     |
+|------------------|----------|------------------------------------------|
+| 缓存管理         | 5        | CodeLens 缓存的构建、分组和排序          |
+| UI 显示          | 6        | 文本格式化、图标转换、显示字符串         |
+| Overlay 管理     | 3        | Overlay 创建、属性设置、清理             |
+| 渲染系统         | 5        | Overlay 创建/复用/删除、可见范围渲染     |
+| CodeLens 解析    | 3        | 解析队列的处理和清理                     |
+| 交互处理         | 2        | CodeLens 命令执行                        |
+| 辅助函数         | 2        | 可见范围计算和边界检查                   |
+| 行数增量优化     | 8        | 基于光标位置的 overlay 复用优化测试      |
+| Mock 功能        | 3        | Mock 辅助函数验证                        |
 
 ## 运行测试
 
-### 使用 Makefile (推荐)
+### 使用 Eask (推荐)
 
 ```bash
-# 在项目根目录运行
-make test
-```
-
-### 使用脚本
-
-```bash
-./run-tests.sh
+eask test ert tests/eglot-codelens-test.el
 ```
 
 ### 手动运行
 
 ```bash
-emacs -q -batch -L . \
-    -l eglot-codelens.el \
+emacs -batch -l eglot-codelens.el \
     -l tests/eglot-codelens-test.el \
     -f ert-run-tests-batch-and-exit
 ```
@@ -126,6 +119,38 @@ M-x ert
 ```
 
 **重要**: 此测试在 GUI 模式下运行，在 batch mode 下自动跳过。
+
+### 6. 行数增量优化测试
+
+测试基于光标位置的 overlay 复用优化逻辑：
+
+```elisp
+(ert-deftest eglot-codelens-test-render-cursor-line-no-delta ()
+  "Test that CodeLens at cursor line is not adjusted by delta."
+  ;; 验证修复: (>= line cursor-line) -> (> line cursor-line)
+  ;; 光标所在行不应用 delta 调整，只有光标之后的行才调整
+  ;;
+  ;; 场景: 光标在 line 5，插入 2 行后 (delta = +2)
+  ;; - Line 5 (光标行): 查找 line 5 (不调整) ✓ 找到匹配
+  ;; - Line 7 (光标后): 查找 line 5 (7-2=5) ✗ 已被占用
+  ;; 结果: 一个复用，一个新建，总数仍为 2
+  )
+```
+
+**使用场景**:
+- 文档编辑时插入/删除行，通过计算行数增量来优化 overlay 查找
+- 光标之前的行不受影响，光标之后的行按增量调整查找
+- 避免全量重建 overlay，提升性能
+
+相关测试用例：
+- `eglot-codelens-test-prev-line-count-initialization` - 初始化行数计数
+- `eglot-codelens-test-prev-line-count-update` - 更新行数计数
+- `eglot-codelens-test-render-reuse-with-line-insertion` - 行插入时的复用
+- `eglot-codelens-test-render-reuse-with-line-deletion` - 行删除时的复用
+- `eglot-codelens-test-render-cursor-boundary-lookup` - 光标边界查找
+- `eglot-codelens-test-render-no-delta-same-line-count` - 无增量时直接复用
+- `eglot-codelens-test-render-cursor-line-no-delta` - 光标行不调整
+- `eglot-codelens-test-cleanup-buffer-clears-prev-line-count` - 清理时重置计数
 
 ## Mock 辅助函数
 
@@ -259,5 +284,4 @@ A: 按照 ERT 格式添加测试：
 
 - `eglot-codelens.el` - 主程序文件
 - `tests/eglot-codelens-test.el` - 测试文件
-- `run-tests.sh` - 测试运行脚本
-- `Makefile` - 构建文件
+- `Eask` - Eask 配置文件

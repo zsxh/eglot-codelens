@@ -714,6 +714,45 @@ Optional COMMAND provides the command plist."
             ;; Should still be 2 (both reused)
             (should (= count-after-second 2))))))))
 
+(ert-deftest eglot-codelens-test-render-cursor-line-no-delta ()
+  "Test that CodeLens at cursor line is not adjusted by delta."
+  ;; This test verifies the fix: changed from (>= line cursor-line) to (> line cursor-line)
+  ;; The cursor line itself should NOT be adjusted, only lines AFTER cursor
+  (with-temp-buffer
+    ;; Start with 10 lines
+    (dotimes (_ 10) (insert "line\n"))
+    (goto-char (point-min))
+    (forward-line 4)  ; Move cursor to line 5
+    (let* ((c1 (eglot-codelens-test--mock-codelens 5 "at-cursor"))    ; AT cursor line
+           (c2 (eglot-codelens-test--mock-codelens 7 "after-cursor")) ; After cursor
+           (c1-new (eglot-codelens-test--mock-codelens 5 "at-cursor"))
+           (c2-new (eglot-codelens-test--mock-codelens 7 "after-cursor"))
+           (codelens (vector c1 c2))
+           (codelens-new (vector c1-new c2-new))
+           (old-cache (eglot-codelens--build-cache codelens))
+           (new-cache (eglot-codelens--build-cache codelens-new))
+           (docver-old 1)
+           (docver-new 2)
+           (old-line-count (count-lines (point-min) (point-max))))
+      ;; First render
+      (cl-letf (((symbol-function 'eglot-codelens--visible-range)
+                 (lambda (&rest _) (cons 1 10))))
+        (eglot-codelens--render-codelens old-cache docver-old '(5 7) nil (cons 1 10))
+        (setq eglot-codelens--prev-line-count old-line-count)
+        (let ((count-after-first (eglot-codelens-test--count-codelens-overlays)))
+          (should (= count-after-first 2))
+          ;; Simulate inserting 2 lines before cursor (delta = +2)
+          ;; prev-line-count = 8, current = 10, delta = 10 - 8 = 2
+          ;; Cursor is at line 5
+          ;; Line 5 = cursor line: lookup line 5 (NO delta applied) - should find match
+          ;; Line 7 > cursor line 5: lookup line 5 (7 - 2 = 5) - should find match
+          ;; Wait, both look up line 5! Only the first one should find a match.
+          (setq eglot-codelens--prev-line-count (- old-line-count 2))
+          (eglot-codelens--render-codelens new-cache docver-new '(5 7) old-cache (cons 1 10))
+          (let ((count-after-second (eglot-codelens-test--count-codelens-overlays)))
+            ;; Should be 2 (one reused at line 5, one created new for line 7)
+            (should (= count-after-second 2))))))))
+
 (ert-deftest eglot-codelens-test-cleanup-buffer-clears-prev-line-count ()
   "Test that cleanup buffer clears prev-line-count."
   (with-temp-buffer
@@ -731,7 +770,6 @@ Optional COMMAND provides the command plist."
       (eglot-codelens--cleanup-buffer)
       ;; Verify prev-line-count is cleared (in current buffer)
       (should (null eglot-codelens--prev-line-count)))))
-
 (provide 'eglot-codelens-test)
 
 ;;; eglot-codelens-test.el ends here
