@@ -652,7 +652,7 @@ If there are multiple, show a selection menu for user to choose."
              (current-buffer))))))
 
 (defun eglot-codelens--visible-range (&optional extend-lines)
-  "Calculate the visible line range for the buffer's window, with optional extension.
+  "Calculate the visible line range for current buffer's window, with optional extension.
 
 EXTEND-LINES, when a positive integer, extends the range by that many
 lines in both directions (useful for pre-fetching).
