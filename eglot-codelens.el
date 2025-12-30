@@ -628,8 +628,7 @@ If there are multiple, show a selection menu for user to choose."
                    (when (timerp eglot-codelens--refresh-timer)
                      (cancel-timer eglot-codelens--refresh-timer))
                    (setq eglot-codelens--refresh-timer nil)
-                   (when (eq (current-buffer) (window-buffer win))
-                     (eglot-codelens--refresh-visible-area)))))
+                   (eglot-codelens--refresh-visible-area))))
              (current-buffer)
              (selected-window))))))
 
@@ -654,17 +653,16 @@ If there are multiple, show a selection menu for user to choose."
              (current-buffer))))))
 
 (defun eglot-codelens--visible-range (&optional extend-lines)
-  "Calculate the visible line range of the current window, with optional extension.
+  "Calculate the visible line range for the buffer's window, with optional extension.
 
 EXTEND-LINES, when a positive integer, extends the range by that many
 lines in both directions (useful for pre-fetching).
 
 Return a cons cell (BEG-LINE . END-LINE) where both are 1-based line numbers.
-END-LINE may exceed the buffer's actual line count.
-
-This function requires a selected window with a valid buffer."
-  (let* ((beg (window-start))
-         (end (window-end nil t))
+END-LINE may exceed the buffer's actual line count."
+  (let* ((w (car (get-buffer-window-list)))
+         (beg (window-start w))
+         (end (window-end w t))
          (beg-line (line-number-at-pos beg t))
          (end-line (line-number-at-pos end t)))
     (if (and extend-lines (integerp extend-lines))
