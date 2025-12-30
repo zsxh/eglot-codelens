@@ -622,15 +622,14 @@ If there are multiple, show a selection menu for user to choose."
       (setq eglot-codelens--refresh-timer
             (run-with-idle-timer
              eglot-codelens-visible-refresh-delay nil
-             (lambda (buf win)
+             (lambda (buf)
                (when (buffer-live-p buf)
                  (with-current-buffer buf
                    (when (timerp eglot-codelens--refresh-timer)
                      (cancel-timer eglot-codelens--refresh-timer))
                    (setq eglot-codelens--refresh-timer nil)
                    (eglot-codelens--refresh-visible-area))))
-             (current-buffer)
-             (selected-window))))))
+             (current-buffer))))))
 
 (defun eglot-codelens--on-document-change (&rest _args)
   "Handle document changes via Eglot's document-changed hook."
