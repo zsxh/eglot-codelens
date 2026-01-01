@@ -6,7 +6,7 @@
 ;; Author: Zxsh Chen <bnbvbchen@gmail.com>
 ;; URL: https://github.com/zsxh/eglot-codelens
 ;; Keywords: eglot, codelens, tools
-;; Package-Requires: ((emacs "30.1") (compat "30.1.0.0") (eglot "1.17.30") (jsonrpc "1.0.24"))
+;; Package-Requires: ((emacs "30.1") (compat "30.1.0.1") (eglot "1.17.30") (jsonrpc "1.0.24"))
 
 ;; This file is not part of GNU Emacs.
 
@@ -46,8 +46,9 @@
 
 ;;; Code:
 
-(require 'eglot)
 (require 'cl-lib)
+(require 'compat)
+(require 'eglot)
 
 (require 'nerd-icons nil t)
 
@@ -343,15 +344,13 @@ CODELENS-CELL is a cons cell (CODELENS . OVERLAY)."
   "Update overlay in CODELENS-CELL with RESOLVED CodeLens data.
 CODELENS-CELL is a cons cell (CODELENS . OVERLAY).
 RESOLVED is the resolved CodeLens data from the server."
-  (let* ((codelens (car codelens-cell))
-         (ov (cdr codelens-cell))
+  (let* ((ov (cdr codelens-cell))
          (command (plist-get resolved :command)))
     (when (and eglot-codelens-mode
                ov (overlayp ov) (overlay-buffer ov)
                (eq (overlay-get ov 'eglot-codelens-docver) eglot-codelens--version))
       ;; Update cache with resolved codelens
-      (cl-remf codelens :data)
-      (plist-put codelens :command command)
+      (setcar codelens-cell resolved)
 
       ;; Update the display string
       (let* ((line-start (overlay-start ov))
@@ -698,7 +697,7 @@ without re-fetching CodeLens from the server."
   :group 'eglot-codelens
   (cond
    (eglot-codelens-mode
-    (if (and (bound-and-true-p eglot--managed-mode)
+    (if (and (eglot-managed-p)
              (eglot-current-server)
              (eglot-server-capable :codeLensProvider))
         (progn
