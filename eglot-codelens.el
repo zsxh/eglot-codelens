@@ -41,7 +41,7 @@
 ;;   (add-hook 'eglot-managed-mode-hook #'eglot-codelens-mode)
 ;;
 ;; NOTE: This extension relies on some eglot--internal symbols
-;; (eglot--versioned-identifier, eglot--TextDocumentIdentifier, etc).
+;; (eglot--docver, eglot--TextDocumentIdentifier, etc).
 
 
 ;;; Code:
@@ -126,6 +126,12 @@ This is used to batch resolve requests with debouncing.")
 This is used to efficiently clean up stale overlays without traversing
 the entire buffer's overlay list.")
 
+(defun eglot-codelens--docver ()
+  "Get the current document version for CodeLens tracking.
+Returns `eglot--docver' if available, otherwise falls back to
+`eglot--versioned-identifier'."
+  (or eglot--docver eglot--versioned-identifier))
+
 (defun eglot-codelens--build-cache (codelens-list)
   "Build cache from CODELENS-LIST.
 Returns a hash table with line numbers as keys.
@@ -209,7 +215,7 @@ Makes an async request to :textDocument/codeLens.
 Renders only the visible area initially, with the full cache stored
 for later visible-area refreshes."
   (when-let* ((server (eglot-current-server))
-              (docver eglot--versioned-identifier)
+              (docver (eglot-codelens--docver))
               (buf (current-buffer)))
     (jsonrpc-async-request
      server
@@ -218,7 +224,7 @@ for later visible-area refreshes."
                    (when (buffer-live-p buf)
                      (with-current-buffer buf
                        (when (and eglot-codelens-mode
-                                  (eq docver eglot--versioned-identifier))
+                                  (eq docver (eglot-codelens--docver)))
                          ;; Save old cache before updating
                          (let ((old-cache eglot-codelens--cache)
                                (new-cache (eglot-codelens--build-cache codelens-list))
@@ -676,7 +682,7 @@ This function efficiently updates only the visible portion of the buffer
 without re-fetching CodeLens from the server."
   (when (and eglot-codelens-mode
              eglot-codelens--cache
-             (eq eglot-codelens--version eglot--versioned-identifier))
+             (eq eglot-codelens--version (eglot-codelens--docver)))
     (let* ((docver eglot-codelens--version)
            (range (eglot-codelens--visible-range))
            (beg-line (car range))
