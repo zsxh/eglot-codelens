@@ -2,7 +2,7 @@
 
 ;; Copyright (C) 2025 Zxsh Chen
 
-;; Version: 0.3
+;; Version: 0.4
 ;; Author: Zxsh Chen <bnbvbchen@gmail.com>
 ;; URL: https://github.com/zsxh/eglot-codelens
 ;; Keywords: eglot, codelens, tools
