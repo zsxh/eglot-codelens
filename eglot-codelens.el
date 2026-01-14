@@ -575,7 +575,9 @@ If there are multiple, show a selection menu for user to choose."
           eglot-codelens--version nil
           eglot-codelens--overlays nil)
     ;; Add Eglot document change hook
-    (add-hook 'eglot--document-changed-hook #'eglot-codelens--on-document-change nil t)
+    (if (boundp 'eglot--send-changes-hook)
+        (add-hook 'eglot--send-changes-hook #'eglot-codelens--on-document-change nil t)
+      (add-hook 'eglot--document-changed-hook #'eglot-codelens--on-document-change nil t))
     ;; Add window scroll hook for visible area refresh
     (add-hook 'window-scroll-functions #'eglot-codelens--schedule-visible-refresh nil t)
     ;; Add window configuration change hook
@@ -610,7 +612,9 @@ If there are multiple, show a selection menu for user to choose."
         eglot-codelens--overlays nil)
 
   ;; Remove Eglot document change hook
-  (remove-hook 'eglot--document-changed-hook #'eglot-codelens--on-document-change t)
+  (if (boundp 'eglot--send-changes-hook)
+      (remove-hook 'eglot--send-changes-hook #'eglot-codelens--on-document-change t)
+    (remove-hook 'eglot--document-changed-hook #'eglot-codelens--on-document-change t))
   ;; Remove window scroll hook
   (remove-hook 'window-scroll-functions #'eglot-codelens--schedule-visible-refresh t)
   ;; Remove window configuration change hook
