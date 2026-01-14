@@ -302,7 +302,7 @@ Optional COMMAND provides the command plist."
       ;; Mock visible range to include line 1
       (cl-letf (((symbol-function 'eglot-codelens--visible-range)
                  (lambda (&rest _) (cons 1 3))))
-        (eglot-codelens--render-codelens cache docver '(1) nil (cons 1 3))
+        (eglot-codelens--render-codelens cache docver '(1) nil nil (cons 1 3))
         ;; Should have created 2 overlays
         (should (= (eglot-codelens-test--count-overlays-in-range 1 1) 2))))))
 
@@ -319,7 +319,7 @@ Optional COMMAND provides the command plist."
       ;; Mock visible range to only include lines 3-6
       (cl-letf (((symbol-function 'eglot-codelens--visible-range)
                  (lambda (&rest _) (cons 3 6))))
-        (eglot-codelens--render-codelens cache docver '(1 3 6) nil (cons 3 6))
+        (eglot-codelens--render-codelens cache docver '(1 3 6) nil nil (cons 3 6))
         ;; Should only have overlays for lines 3 and 6
         (should (= (eglot-codelens-test--count-overlays-in-range 1 1) 0))
         (should (= (eglot-codelens-test--count-overlays-in-range 3 3) 1))
@@ -344,11 +344,11 @@ Optional COMMAND provides the command plist."
       ;; First render - create overlays
       (cl-letf (((symbol-function 'eglot-codelens--visible-range)
                  (lambda (&rest _) (cons 1 3))))
-        (eglot-codelens--render-codelens old-cache docver-old '(1) nil (cons 1 3))
+        (eglot-codelens--render-codelens old-cache docver-old '(1) nil nil (cons 1 3))
         (setq count-after-first (eglot-codelens-test--count-codelens-overlays))
         (should (= count-after-first 2))
         ;; Second render - should reuse overlays
-        (eglot-codelens--render-codelens new-cache docver-new '(1) old-cache (cons 1 3))
+        (eglot-codelens--render-codelens new-cache docver-new '(1) nil old-cache (cons 1 3))
         (setq count-after-second (eglot-codelens-test--count-codelens-overlays))
         (should (= count-after-second 2))))))
 
@@ -367,11 +367,11 @@ Optional COMMAND provides the command plist."
       ;; First render - create overlays for lines 1 and 3
       (cl-letf (((symbol-function 'eglot-codelens--visible-range)
                  (lambda (&rest _) (cons 1 6))))
-        (eglot-codelens--render-codelens old-cache docver-old '(1 3) nil (cons 1 6))
+        (eglot-codelens--render-codelens old-cache docver-old '(1 3) nil nil (cons 1 6))
         (let ((count-after-first (eglot-codelens-test--count-codelens-overlays)))
           (should (= count-after-first 2))
           ;; Second render - line 3 overlay should be deleted
-          (eglot-codelens--render-codelens new-cache docver-new '(1) old-cache (cons 1 6))
+          (eglot-codelens--render-codelens new-cache docver-new '(1) t old-cache (cons 1 6))
           (let ((count-after-second (eglot-codelens-test--count-codelens-overlays)))
             (should (= count-after-second 1))
             (should (eglot-codelens-test--get-overlay-at-line 1))
@@ -393,7 +393,7 @@ Optional COMMAND provides the command plist."
                  (lambda (&rest _) (cons 1 3)))
                 ((symbol-function 'eglot-codelens--resolve-schedule)
                  (lambda () nil)))  ; Prevent auto-processing
-        (eglot-codelens--render-codelens cache docver '(1) nil (cons 1 3))
+        (eglot-codelens--render-codelens cache docver '(1) nil nil (cons 1 3))
         ;; Check that c2 was added to resolve queue
         (should eglot-codelens--resolve-queue)
         (should (= (length eglot-codelens--resolve-queue) 1))))))
@@ -549,7 +549,7 @@ Optional COMMAND provides the command plist."
       (setq eglot-codelens--prev-line-count nil)
       (cl-letf (((symbol-function 'eglot-codelens--visible-range)
                  (lambda (&rest _) (cons 1 10))))
-        (eglot-codelens--render-codelens cache docver '(5) nil (cons 1 10))
+        (eglot-codelens--render-codelens cache docver '(5) t nil (cons 1 10))
         (should (eq eglot-codelens--prev-line-count initial-line-count))))))
 
 (ert-deftest eglot-codelens-test-prev-line-count-update ()
@@ -564,11 +564,12 @@ Optional COMMAND provides the command plist."
            (initial-line-count (line-number-at-pos (point-max) t)))
       (cl-letf (((symbol-function 'eglot-codelens--visible-range)
                  (lambda (&rest _) (cons 1 10))))
-        ;; First render
-        (eglot-codelens--render-codelens cache docver '(5) nil (cons 1 10))
+        ;; First render (with file-changed-p to initialize prev-line-count)
+        (eglot-codelens--render-codelens cache docver '(5) t nil (cons 1 10))
         (should (eq eglot-codelens--prev-line-count initial-line-count))
         ;; Second render with same cache (prev-line-count stays same)
-        (eglot-codelens--render-codelens cache docver2 '(5) cache (cons 1 10))
+        ;; Use nil for file-changed-p to indicate no file change
+        (eglot-codelens--render-codelens cache docver2 '(5) nil cache (cons 1 10))
         (should (eq eglot-codelens--prev-line-count initial-line-count))))))
 
 (ert-deftest eglot-codelens-test-render-reuse-with-line-insertion ()
@@ -592,14 +593,14 @@ Optional COMMAND provides the command plist."
       ;; First render
       (cl-letf (((symbol-function 'eglot-codelens--visible-range)
                  (lambda (&rest _) (cons 1 10))))
-        (eglot-codelens--render-codelens old-cache docver-old '(3 7) nil (cons 1 10))
+        (eglot-codelens--render-codelens old-cache docver-old '(3 7) nil nil (cons 1 10))
         (setq eglot-codelens--prev-line-count old-line-count)
         (let ((count-after-first (eglot-codelens-test--count-codelens-overlays)))
           (should (= count-after-first 2))
           ;; Simulate inserting 2 lines (delta = +2)
           ;; prev-line-count = 8, current = 10, delta = 10 - 8 = 2
           (setq eglot-codelens--prev-line-count (- old-line-count 2))
-          (eglot-codelens--render-codelens new-cache docver-new '(3 7) old-cache (cons 1 10))
+          (eglot-codelens--render-codelens new-cache docver-new '(3 7) t old-cache (cons 1 10))
           ;; Line 3 is before cursor (line 6): lookup line 3 (no delta)
           ;; Line 7 is after cursor (line 6): lookup line 5 (7 - 2 = 5)
           ;; Since old cache has line 3 and 7, but we're looking up 3 and 5,
@@ -629,14 +630,14 @@ Optional COMMAND provides the command plist."
       ;; First render
       (cl-letf (((symbol-function 'eglot-codelens--visible-range)
                  (lambda (&rest _) (cons 1 10))))
-        (eglot-codelens--render-codelens old-cache docver-old '(3 7) nil (cons 1 10))
+        (eglot-codelens--render-codelens old-cache docver-old '(3 7) nil nil (cons 1 10))
         (setq eglot-codelens--prev-line-count old-line-count)
         (let ((count-after-first (eglot-codelens-test--count-codelens-overlays)))
           (should (= count-after-first 2))
           ;; Simulate deleting 2 lines (delta = -2)
           ;; prev-line-count = 12, current = 10, delta = 10 - 12 = -2
           (setq eglot-codelens--prev-line-count (+ old-line-count 2))
-          (eglot-codelens--render-codelens new-cache docver-new '(3 7) old-cache (cons 1 10))
+          (eglot-codelens--render-codelens new-cache docver-new '(3 7) t old-cache (cons 1 10))
           ;; Line 3 is before cursor (line 6): lookup line 3 (no delta)
           ;; Line 7 is after cursor (line 6): lookup line 9 (7 - (-2) = 9)
           ;; Old cache has line 3 and 7
@@ -666,7 +667,7 @@ Optional COMMAND provides the command plist."
       ;; First render
       (cl-letf (((symbol-function 'eglot-codelens--visible-range)
                  (lambda (&rest _) (cons 1 15))))
-        (eglot-codelens--render-codelens old-cache docver-old '(5 10) nil (cons 1 15))
+        (eglot-codelens--render-codelens old-cache docver-old '(5 10) nil nil (cons 1 15))
         (setq eglot-codelens--prev-line-count old-line-count)
         (let ((count-after-first (eglot-codelens-test--count-codelens-overlays)))
           (should (= count-after-first 2))
@@ -675,7 +676,7 @@ Optional COMMAND provides the command plist."
           ;; Cursor is at line 8
           ;; Line 5 < cursor 8: lookup line 5 (no delta) - should find match
           ;; Line 10 >= cursor 8: lookup line 7 (10 - 3 = 7) - no match in old cache
-          (eglot-codelens--render-codelens new-cache docver-new '(5 10) old-cache (cons 1 15))
+          (eglot-codelens--render-codelens new-cache docver-new '(5 10) t old-cache (cons 1 15))
           (let ((count-after-second (eglot-codelens-test--count-codelens-overlays)))
             ;; Should be 2 (line 5 reused, line 10 created new)
             (should (= count-after-second 2))))))))
@@ -700,7 +701,7 @@ Optional COMMAND provides the command plist."
       ;; First render
       (cl-letf (((symbol-function 'eglot-codelens--visible-range)
                  (lambda (&rest _) (cons 1 10))))
-        (eglot-codelens--render-codelens old-cache docver-old '(2 8) nil (cons 1 10))
+        (eglot-codelens--render-codelens old-cache docver-old '(2 8) nil nil (cons 1 10))
         (setq eglot-codelens--prev-line-count old-line-count)
         (let ((count-after-first (eglot-codelens-test--count-codelens-overlays)))
           (should (= count-after-first 2))
@@ -709,7 +710,7 @@ Optional COMMAND provides the command plist."
           ;; Line 2 < cursor 5: lookup line 2
           ;; Line 8 >= cursor 5: lookup line 8
           ;; Both should find matches in old cache
-          (eglot-codelens--render-codelens new-cache docver-new '(2 8) old-cache (cons 1 10))
+          (eglot-codelens--render-codelens new-cache docver-new '(2 8) nil old-cache (cons 1 10))
           (let ((count-after-second (eglot-codelens-test--count-codelens-overlays)))
             ;; Should still be 2 (both reused)
             (should (= count-after-second 2))))))))
@@ -737,7 +738,7 @@ Optional COMMAND provides the command plist."
       ;; First render
       (cl-letf (((symbol-function 'eglot-codelens--visible-range)
                  (lambda (&rest _) (cons 1 10))))
-        (eglot-codelens--render-codelens old-cache docver-old '(5 7) nil (cons 1 10))
+        (eglot-codelens--render-codelens old-cache docver-old '(5 7) nil nil (cons 1 10))
         (setq eglot-codelens--prev-line-count old-line-count)
         (let ((count-after-first (eglot-codelens-test--count-codelens-overlays)))
           (should (= count-after-first 2))
@@ -748,7 +749,7 @@ Optional COMMAND provides the command plist."
           ;; Line 7 > cursor line 5: lookup line 5 (7 - 2 = 5) - should find match
           ;; Wait, both look up line 5! Only the first one should find a match.
           (setq eglot-codelens--prev-line-count (- old-line-count 2))
-          (eglot-codelens--render-codelens new-cache docver-new '(5 7) old-cache (cons 1 10))
+          (eglot-codelens--render-codelens new-cache docver-new '(5 7) t old-cache (cons 1 10))
           (let ((count-after-second (eglot-codelens-test--count-codelens-overlays)))
             ;; Should be 2 (one reused at line 5, one created new for line 7)
             (should (= count-after-second 2))))))))
