@@ -224,7 +224,8 @@ for later visible-area refreshes."
                    (when (buffer-live-p buf)
                      (with-current-buffer buf
                        (when (and eglot-codelens-mode
-                                  (eq docver (eglot-codelens--docver)))
+                                  (eq docver (eglot-codelens--docver))
+                                  (eq (window-buffer (selected-window)) buf))
                          ;; Save old cache before updating
                          (let ((old-cache eglot-codelens--cache)
                                (new-cache (eglot-codelens--build-cache codelens-list))
@@ -668,7 +669,8 @@ If there are multiple, show a selection menu for user to choose."
                    (when (timerp eglot-codelens--refresh-timer)
                      (cancel-timer eglot-codelens--refresh-timer))
                    (setq eglot-codelens--refresh-timer nil)
-                   (eglot-codelens--refresh-visible-area))))
+                   (when (eq (window-buffer (selected-window)) buf)
+                     (eglot-codelens--refresh-visible-area)))))
              (current-buffer))))))
 
 (defun eglot-codelens--on-document-change (&rest _args)
@@ -699,11 +701,11 @@ lines in both directions (useful for pre-fetching).
 
 Return a cons cell (BEG-LINE . END-LINE) where both are 1-based line numbers.
 END-LINE may exceed the buffer's actual line count."
-  (let* ((w (car (get-buffer-window-list)))
-         (beg (window-start w))
-         (end (window-end w t))
-         (beg-line (line-number-at-pos beg t))
-         (end-line (line-number-at-pos end t)))
+  (when-let* ((w (car (get-buffer-window-list)))
+              (beg (window-start w))
+              (end (window-end w t))
+              (beg-line (line-number-at-pos beg t))
+              (end-line (line-number-at-pos end t)))
     (if (and extend-lines (integerp extend-lines))
         (cons (max 1 (- beg-line extend-lines))
               ;; Overflow is safe here,
@@ -715,22 +717,22 @@ END-LINE may exceed the buffer's actual line count."
   "Refresh CodeLens overlays in visible window area using existing cache.
 This function efficiently updates only the visible portion of the buffer
 without re-fetching CodeLens from the server."
-  (when (and eglot-codelens-mode
-             eglot-codelens--cache
-             (eq eglot-codelens--version (eglot-codelens--docver)))
-    (let* ((docver eglot-codelens--version)
-           (range (eglot-codelens--visible-range))
-           (beg-line (car range))
-           (end-line (cdr range))
-           ;; Filter pending-lines to only those within visible range
-           (pending-lines (when (and eglot-codelens--pending-lines
-                                     (length> eglot-codelens--pending-lines 0))
-                            (cl-loop for line in eglot-codelens--pending-lines
-                                     when (and (>= line beg-line) (<= line end-line))
-                                     collect line))))
-      ;; Use existing cache - no new data, just refresh visible area
-      (eglot-codelens--render-codelens
-       eglot-codelens--cache docver pending-lines nil nil range))))
+  (when-let* ((_ (and eglot-codelens-mode
+                      eglot-codelens--cache
+                      (eq eglot-codelens--version (eglot-codelens--docver))))
+              (range (eglot-codelens--visible-range))
+              (docver eglot-codelens--version)
+              (beg-line (car range))
+              (end-line (cdr range))
+              ;; Filter pending-lines to only those within visible range
+              (pending-lines (when (and eglot-codelens--pending-lines
+                                        (length> eglot-codelens--pending-lines 0))
+                               (cl-loop for line in eglot-codelens--pending-lines
+                                        when (and (>= line beg-line) (<= line end-line))
+                                        collect line))))
+    ;; Use existing cache - no new data, just refresh visible area
+    (eglot-codelens--render-codelens
+     eglot-codelens--cache docver pending-lines nil nil range)))
 
 ;;; Minor Mode Definition
 

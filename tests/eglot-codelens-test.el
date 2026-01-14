@@ -510,6 +510,16 @@ Optional COMMAND provides the command plist."
             ;; Overflow is allowed
             (should t)))))))
 
+(ert-deftest eglot-codelens-test-visible-range-no-window ()
+  "Test that visible-range returns nil when there's no window."
+  ;; Test with a buffer that's not displayed in any window
+  (with-temp-buffer
+    (dotimes (_ 10) (insert "line\n"))
+    ;; Ensure buffer is not displayed in any window
+    (should (null (get-buffer-window-list)))
+    ;; visible-range should return nil (defensive behavior)
+    (should (null (eglot-codelens--visible-range)))))
+
 
 ;;; Setup and Teardown
 
