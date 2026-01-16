@@ -36,9 +36,12 @@ CodeLens support for Eglot, displaying LSP CodeLens information as overlays abov
 
 ### Manual
 
-Download `eglot-codelens.el` and add it to your `load-path`:
+Download `eglot-codelens.el` and add it to your `load-path` or install it via `package-vc-install`:
 
 ```elisp
+(unless (package-installed-p 'eglot-codelens)
+  (package-vc-install
+   '(eglot-codelens :url "https://github.com/zsxh/eglot-codelens")))
 (require 'eglot-codelens)
 (add-hook 'eglot-managed-mode-hook #'eglot-codelens-mode)
 ```
