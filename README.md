@@ -6,6 +6,8 @@ CodeLens support for Eglot, displaying LSP CodeLens information as overlays abov
 
 ![Screenshot](https://raw.githubusercontent.com/zsxh/eglot-codelens/refs/heads/imgs/screenshot.webp)
 
+https://github.com/user-attachments/assets/01d225ce-3ce4-4c4a-a962-b48834247b7e
+
 ## Features
 
 - `textDocument/codeLens` and `codeLens/resolve` support

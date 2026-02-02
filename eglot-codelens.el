@@ -103,6 +103,9 @@ Used to compute delta when reusing overlays across document edits.")
 (defvar-local eglot-codelens--version nil
   "Document version for cached CodeLens.")
 
+(defvar-local eglot-codelens--recent-changes nil
+  "Recent buffer changes as collected by `eglot--before-change'.")
+
 (defvar-local eglot-codelens--update-timer nil
   "Timer for delayed CodeLens updates.")
 
@@ -438,7 +441,8 @@ without a :command property, adding them to `eglot-codelens--resolve-queue'."
                  (current-line 1)
                  (prev-line-count eglot-codelens--prev-line-count)
                  (line-delta (if file-changed-p (eglot-codelens--line-delta) 0))
-                 (cursor-line (line-number-at-pos (point) t)))
+                 (beg-line (or (eglot-codelens--change-begin-line)
+                               (line-number-at-pos (point-min) t))))
             (goto-char (point-min))
             (dolist (line lines-to-process)
               (forward-line (- line current-line))
@@ -455,7 +459,7 @@ without a :command property, adding them to `eglot-codelens--resolve-queue'."
                          ;; At/After cursor: adjust by delta (lines inserted/deleted)
                          (lookup-line (when old-cache
                                         (if (and (/= line-delta 0)
-                                                 (> line cursor-line))
+                                                 (> line beg-line))
                                             (- line line-delta)
                                           line)))
                          (old-sorted (when old-cache
@@ -485,7 +489,8 @@ without a :command property, adding them to `eglot-codelens--resolve-queue'."
                                                  line-start
                                                  index
                                                  total-on-line))
-                                   (overlay-put new-ov 'eglot-codelens-docver docver)))
+                                   (overlay-put new-ov 'eglot-codelens-docver docver)
+                                   (move-overlay new-ov line-start line-start)))
 
                                 ;; reuse and update existing overlay from old-cache
                                 ((and old-ov (overlayp old-ov) (overlay-buffer old-ov))
@@ -497,7 +502,8 @@ without a :command property, adding them to `eglot-codelens--resolve-queue'."
                                                index
                                                total-on-line))
                                  (overlay-put old-ov 'eglot-codelens-docver docver)
-                                 (overlay-put old-ov 'eglot-codelens-usever docver))
+                                 (overlay-put old-ov 'eglot-codelens-usever docver)
+                                 (move-overlay old-ov line-start line-start))
 
                                 ;; create new overlay
                                 (t
@@ -598,59 +604,21 @@ If there are multiple, show a selection menu for user to choose."
 
 ;;; Eglot Integration
 
-(defun eglot-codelens--setup-buffer ()
-  "Setup CodeLens for current buffer."
+(defun eglot-codelens--collect-recent-changes (_beg _end _pre-change-length)
+  "Collect recent changes."
   (when eglot-codelens-mode
-    ;; Initialize buffer-local variables
-    (setq eglot-codelens--cache nil
-          eglot-codelens--prev-line-count nil
-          eglot-codelens--version nil
-          eglot-codelens--overlays nil)
-    ;; Add Eglot document change hook
-    (if (boundp 'eglot--send-changes-hook)
-        (add-hook 'eglot--send-changes-hook #'eglot-codelens--on-document-change nil t)
-      (add-hook 'eglot--document-changed-hook #'eglot-codelens--on-document-change nil t))
-    ;; Add window scroll hook for visible area refresh
-    (add-hook 'window-scroll-functions #'eglot-codelens--schedule-visible-refresh nil t)
-    ;; Add window configuration change hook
-    (add-hook 'window-configuration-change-hook #'eglot-codelens--schedule-visible-refresh nil t)))
+    (setq eglot-codelens--recent-changes eglot--recent-changes)))
 
-(defun eglot-codelens--cleanup-buffer ()
-  "Cleanup CodeLens for current buffer."
-  ;; Cancel any pending update timer
-  (when eglot-codelens--update-timer
-    (cancel-timer eglot-codelens--update-timer)
-    (setq eglot-codelens--update-timer nil))
-  ;; Cancel any pending refresh timer
-  (when eglot-codelens--refresh-timer
-    (cancel-timer eglot-codelens--refresh-timer)
-    (setq eglot-codelens--refresh-timer nil))
-  ;; Cancel any pending resolve timer
-  (when eglot-codelens--resolve-timer
-    (cancel-timer eglot-codelens--resolve-timer)
-    (setq eglot-codelens--resolve-timer nil))
-
-  ;; Remove all overlays
-  (eglot-codelens--cleanup-overlays)
-
-  ;; Clear cache, version, queues, and overlay tracking
-  (when (hash-table-p eglot-codelens--cache)
-    (clrhash eglot-codelens--cache))
-  (setq eglot-codelens--cache nil
-        eglot-codelens--prev-line-count nil
-        eglot-codelens--version nil
-        eglot-codelens--pending-lines nil
-        eglot-codelens--resolve-queue nil
-        eglot-codelens--overlays nil)
-
-  ;; Remove Eglot document change hook
-  (if (boundp 'eglot--send-changes-hook)
-      (remove-hook 'eglot--send-changes-hook #'eglot-codelens--on-document-change t)
-    (remove-hook 'eglot--document-changed-hook #'eglot-codelens--on-document-change t))
-  ;; Remove window scroll hook
-  (remove-hook 'window-scroll-functions #'eglot-codelens--schedule-visible-refresh t)
-  ;; Remove window configuration change hook
-  (remove-hook 'window-configuration-change-hook #'eglot-codelens--schedule-visible-refresh t))
+(defun eglot-codelens--change-begin-line ()
+  ""
+  (when (and eglot-codelens--recent-changes
+             (not (eq :emacs-messup eglot-codelens--recent-changes)))
+    (let ((beg-line most-positive-fixnum))
+      (cl-loop for (beg _end _len _text) in eglot-codelens--recent-changes
+               for line = (plist-get beg :line)
+               do (when (< line beg-line)
+                    (setq beg-line line)))
+      beg-line)))
 
 (defun eglot-codelens--schedule-visible-refresh (&rest _args)
   "Handle window scroll/resize to refresh visible CodeLens with debouncing."
@@ -733,6 +701,61 @@ without re-fetching CodeLens from the server."
     ;; Use existing cache - no new data, just refresh visible area
     (eglot-codelens--render-codelens
      eglot-codelens--cache docver pending-lines nil nil range)))
+
+(defun eglot-codelens--setup-buffer ()
+  "Setup CodeLens for current buffer."
+  (when eglot-codelens-mode
+    ;; Initialize buffer-local variables
+    (setq eglot-codelens--cache nil
+          eglot-codelens--prev-line-count nil
+          eglot-codelens--version nil
+          eglot-codelens--overlays nil)
+    (add-hook 'after-change-functions #'eglot-codelens--collect-recent-changes 10 t)
+    ;; Add Eglot document change hook
+    (if (boundp 'eglot--send-changes-hook)
+        (add-hook 'eglot--send-changes-hook #'eglot-codelens--on-document-change nil t)
+      (add-hook 'eglot--document-changed-hook #'eglot-codelens--on-document-change nil t))
+    ;; Add window scroll hook for visible area refresh
+    (add-hook 'window-scroll-functions #'eglot-codelens--schedule-visible-refresh nil t)
+    ;; Add window configuration change hook
+    (add-hook 'window-configuration-change-hook #'eglot-codelens--schedule-visible-refresh nil t)))
+
+(defun eglot-codelens--cleanup-buffer ()
+  "Cleanup CodeLens for current buffer."
+  ;; Cancel any pending update timer
+  (when eglot-codelens--update-timer
+    (cancel-timer eglot-codelens--update-timer)
+    (setq eglot-codelens--update-timer nil))
+  ;; Cancel any pending refresh timer
+  (when eglot-codelens--refresh-timer
+    (cancel-timer eglot-codelens--refresh-timer)
+    (setq eglot-codelens--refresh-timer nil))
+  ;; Cancel any pending resolve timer
+  (when eglot-codelens--resolve-timer
+    (cancel-timer eglot-codelens--resolve-timer)
+    (setq eglot-codelens--resolve-timer nil))
+
+  ;; Remove all overlays
+  (eglot-codelens--cleanup-overlays)
+
+  ;; Clear cache, version, queues, and overlay tracking
+  (when (hash-table-p eglot-codelens--cache)
+    (clrhash eglot-codelens--cache))
+  (setq eglot-codelens--cache nil
+        eglot-codelens--prev-line-count nil
+        eglot-codelens--version nil
+        eglot-codelens--pending-lines nil
+        eglot-codelens--resolve-queue nil
+        eglot-codelens--overlays nil
+        eglot-codelens--recent-changes nil)
+
+  ;; Remove hooks
+  (remove-hook 'after-change-functions #'eglot-codelens--collect-recent-changes t)
+  (if (boundp 'eglot--send-changes-hook)
+      (remove-hook 'eglot--send-changes-hook #'eglot-codelens--on-document-change t)
+    (remove-hook 'eglot--document-changed-hook #'eglot-codelens--on-document-change t))
+  (remove-hook 'window-scroll-functions #'eglot-codelens--schedule-visible-refresh t)
+  (remove-hook 'window-configuration-change-hook #'eglot-codelens--schedule-visible-refresh t))
 
 ;;; Minor Mode Definition
 
