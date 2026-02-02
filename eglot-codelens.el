@@ -439,10 +439,8 @@ without a :command property, adding them to `eglot-codelens--resolve-queue'."
         (when (and new-cache pending-lines)
           (let* ((lines-to-process (sort pending-lines #'<))
                  (current-line 1)
-                 (prev-line-count eglot-codelens--prev-line-count)
                  (line-delta (if file-changed-p (eglot-codelens--line-delta) 0))
-                 (beg-line (or (eglot-codelens--change-begin-line)
-                               (line-number-at-pos (point-min) t))))
+                 (beg-line (eglot-codelens--change-begin-line)))
             (goto-char (point-min))
             (dolist (line lines-to-process)
               (forward-line (- line current-line))
@@ -610,15 +608,25 @@ If there are multiple, show a selection menu for user to choose."
     (setq eglot-codelens--recent-changes eglot--recent-changes)))
 
 (defun eglot-codelens--change-begin-line ()
-  ""
-  (when (and eglot-codelens--recent-changes
-             (not (eq :emacs-messup eglot-codelens--recent-changes)))
-    (let ((beg-line most-positive-fixnum))
-      (cl-loop for (beg _end _len _text) in eglot-codelens--recent-changes
-               for line = (plist-get beg :line)
-               do (when (< line beg-line)
-                    (setq beg-line line)))
-      beg-line)))
+  "Get the beginning line number of recent buffer changes.
+
+Analyzes `eglot-codelens--recent-changes' (collected from Eglot's change tracking)
+to find the first line affected by edits.  Returns the minimum line number from
+all change ranges, or 1 if there are no recent changes or if the change tracking
+was interrupted by Emacs messup.
+
+This is used in overlay reuse to determine where line adjustments are needed:
+overlays before this line use direct lookup, while overlays at or after this line
+need delta adjustment."
+  (if (and eglot-codelens--recent-changes
+           (not (eq :emacs-messup eglot-codelens--recent-changes)))
+      (let ((beg-line most-positive-fixnum))
+        (cl-loop for (beg _end _len _text) in eglot-codelens--recent-changes
+                 for line = (plist-get beg :line)
+                 do (when (< line beg-line)
+                      (setq beg-line line)))
+        beg-line))
+  1)
 
 (defun eglot-codelens--schedule-visible-refresh (&rest _args)
   "Handle window scroll/resize to refresh visible CodeLens with debouncing."
