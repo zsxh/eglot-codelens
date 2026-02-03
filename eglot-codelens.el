@@ -2,7 +2,7 @@
 
 ;; Copyright (C) 2025 Zxsh Chen
 
-;; Version: 0.4
+;; Version: 0.4.1
 ;; Author: Zxsh Chen <bnbvbchen@gmail.com>
 ;; URL: https://github.com/zsxh/eglot-codelens
 ;; Keywords: eglot, codelens, tools
@@ -625,8 +625,8 @@ need delta adjustment."
                  for line = (plist-get beg :line)
                  do (when (< line beg-line)
                       (setq beg-line line)))
-        beg-line))
-  1)
+        beg-line)
+    1))
 
 (defun eglot-codelens--schedule-visible-refresh (&rest _args)
   "Handle window scroll/resize to refresh visible CodeLens with debouncing."

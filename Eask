@@ -3,7 +3,7 @@
 ;;; Commentary:
 
 (package "eglot-codelens"
-         "0.4"
+         "0.4.1"
          "CodeLens support for Eglot")
 
 (website-url "https://github.com/zsxh/eglot-codelens")
