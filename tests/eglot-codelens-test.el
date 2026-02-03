@@ -395,26 +395,28 @@
           (`(,name ,server ,docver ,expect-request-called)
            (ert-info ((format "Test: %s" name))
              (let ((request-called nil)
-                   (request-args nil))
+                   (request-args nil)
+                   ;; Set up mock for the underlying docver symbol before calling the function
+                   ;; (eglot-codelens--docver is defsubst, so we mock the symbol it reads)
+                   (docver-sym (symbol-value 'eglot-codelens--docver-symbol)))
+               (set docver-sym docver)
                (cl-letf* (((symbol-function 'eglot-current-server)
-                           (lambda () server))
-                          ((symbol-function 'eglot-codelens--docver)
-                           (lambda () docver))
-                          ((symbol-function 'eglot--TextDocumentIdentifier)
-                           (lambda () '(:uri "test://uri")))
-                          ((symbol-function 'jsonrpc-async-request)
-                           (lambda (server method &rest _args)
-                             (setq request-called t)
-                             (setq request-args (list server method)))))
-                 ;; Call the function being tested
-                 (eglot-codelens--fetch-codelens)
-                 ;; Verify expectations
-                 (if expect-request-called
-                     (progn
-                       (should request-called)
-                       (should (equal (cadr request-args) :textDocument/codeLens))
-                       (should request-args))
-                   (should-not request-called)))))))))))
+                             (lambda () server))
+                            ((symbol-function 'eglot--TextDocumentIdentifier)
+                             (lambda () '(:uri "test://uri")))
+                            ((symbol-function 'jsonrpc-async-request)
+                             (lambda (server method &rest _args)
+                               (setq request-called t)
+                               (setq request-args (list server method)))))
+                   ;; Call the function being tested
+                   (eglot-codelens--fetch-codelens)
+                   ;; Verify expectations
+                   (if expect-request-called
+                       (progn
+                         (should request-called)
+                         (should (equal (cadr request-args) :textDocument/codeLens))
+                         (should request-args))
+                     (should-not request-called)))))))))))
 
 (ert-deftest eglot-codelens--fetch-codelens-success-callback-test ()
   "Test success callback behavior of `eglot-codelens--fetch-codelens'."
@@ -2282,17 +2284,18 @@
     (setq eglot-codelens-mode t)
     (let ((render-args nil)
           (test-cache (make-hash-table))
-          (test-docver 5))
+          (test-docver 5)
+          ;; Set up mock for the underlying docver symbol before calling the function
+          ;; (eglot-codelens--docver is defsubst, so we mock the symbol it reads)
+          (docver-sym (symbol-value 'eglot-codelens--docver-symbol)))
+      (set docver-sym test-docver)
       ;; Mock render-codelens to capture arguments
       (cl-letf (((symbol-function 'eglot-codelens--render-codelens)
-                  (lambda (new-cache docver pending-lines file-changed-p old-cache range)
-                    (setq render-args (list new-cache docver pending-lines file-changed-p old-cache range))))
+                 (lambda (new-cache docver pending-lines file-changed-p old-cache range)
+                   (setq render-args (list new-cache docver pending-lines file-changed-p old-cache range))))
                 ((symbol-function 'eglot-codelens--visible-range)
-                  (lambda (&rest _)
-                    (cons 10 20)))
-                ((symbol-function 'eglot-codelens--docver)
-                  (lambda ()
-                    test-docver)))
+                 (lambda (&rest _)
+                   (cons 10 20))))
         ;; Set up cache and version with matching docver
         (setq eglot-codelens--cache test-cache
               eglot-codelens--version test-docver
@@ -2301,12 +2304,13 @@
         (eglot-codelens--refresh-visible-area)
         ;; Verify render-codelens was called with correct arguments
         (should render-args)
-        (should (eq (car render-args) test-cache))  ; new-cache is the cache
-        (should (eq (nth 1 render-args) test-docver))  ; docver matches
-        (should (equal (nth 2 render-args) '(10 15)))  ; pending-lines filtered to visible range
-        (should (null (nth 3 render-args)))  ; file-changed-p is nil
-        (should (null (nth 4 render-args)))  ; old-cache is nil
-        (should (equal (nth 5 render-args) '(10 . 20)))))))  ; range is visible range
+        (should (eq (car render-args) test-cache)) ; new-cache is the cache
+        (should (eq (nth 1 render-args) test-docver)) ; docver matches
+        (should (equal (nth 2 render-args) '(10 15))) ; pending-lines filtered to visible range
+        (should (null (nth 3 render-args))) ; file-changed-p is nil
+        (should (null (nth 4 render-args))) ; old-cache is nil
+        (should (equal (nth 5 render-args) '(10 . 20)))) ; range is visible range
+      )))
 
 (ert-deftest eglot-codelens--refresh-visible-area-filter-pending-test ()
   "Test `eglot-codelens--refresh-visible-area' filters pending-lines by visible range."
@@ -2314,16 +2318,17 @@
     (setq eglot-codelens-mode t)
     (let ((render-pending-lines nil)
           (test-cache (make-hash-table))
-          (test-docver 1))
+          (test-docver 1)
+          ;; Set up mock for the underlying docver symbol before calling the function
+          ;; (eglot-codelens--docver is defsubst, so we mock the symbol it reads)
+          (docver-sym (symbol-value 'eglot-codelens--docver-symbol)))
+      (set docver-sym test-docver)
       (cl-letf (((symbol-function 'eglot-codelens--render-codelens)
-                  (lambda (_new-cache _docver pending-lines _file-changed-p _old-cache _range)
-                    (setq render-pending-lines pending-lines)))
+                 (lambda (_new-cache _docver pending-lines _file-changed-p _old-cache _range)
+                   (setq render-pending-lines pending-lines)))
                 ((symbol-function 'eglot-codelens--visible-range)
-                  (lambda (&rest _)
-                    (cons 50 100)))
-                ((symbol-function 'eglot-codelens--docver)
-                  (lambda ()
-                    test-docver)))
+                 (lambda (&rest _)
+                   (cons 50 100))))
         (setq eglot-codelens--cache test-cache
               eglot-codelens--version test-docver
               eglot-codelens--pending-lines '(10 30 50 70 90 110 130))
