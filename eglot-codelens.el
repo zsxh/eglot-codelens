@@ -129,11 +129,26 @@ This is used to batch resolve requests with debouncing.")
 This is used to efficiently clean up stale overlays without traversing
 the entire buffer's overlay list.")
 
-(defun eglot-codelens--docver ()
-  "Get the current document version for CodeLens tracking.
-Returns `eglot--docver' if available, otherwise falls back to
-`eglot--versioned-identifier'."
-  (or eglot--docver eglot--versioned-identifier))
+(defvar eglot-codelens--docver-symbol (if (boundp 'eglot--docver)
+                                          'eglot--docver
+                                        'eglot--versioned-identifier)
+  "The symbol used to obtain the document version for CodeLens tracking.
+
+This variable holds either `eglot--docver' (preferred) or
+`eglot--versioned-identifier' (fallback) as a symbol.  The symbol
+is resolved dynamically via `symbol-value' to get the current
+document version.
+
+The fallback exists for compatibility with older Eglot versions that
+don't provide `eglot--docver'.")
+
+(defsubst eglot-codelens--docver ()
+  "Return the current document version for CodeLens tracking.
+
+This function resolves the symbol stored in
+`eglot-codelens--docver-symbol' to obtain the actual document
+version value from Eglot's internal state."
+  (symbol-value eglot-codelens--docver-symbol))
 
 (defun eglot-codelens--build-cache (codelens-list)
   "Build cache from CODELENS-LIST.
