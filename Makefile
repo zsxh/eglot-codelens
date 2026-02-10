@@ -54,7 +54,7 @@ test:
 # See https://www.emacswiki.org/emacs/CheckDoc
 checkdoc:
 	@echo "Checking documentation..."
-	$(EASK) lint checkdoc
+	$(EASK) lint checkdoc --strict
 
 # Lint package metadata
 #

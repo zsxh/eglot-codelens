@@ -2,7 +2,7 @@
 
 ;; Copyright (C) 2025 Zxsh Chen
 
-;; Version: 0.4.1
+;; Version: 0.5.0
 ;; Author: Zxsh Chen <bnbvbchen@gmail.com>
 ;; URL: https://github.com/zsxh/eglot-codelens
 ;; Keywords: eglot, codelens, tools
@@ -91,10 +91,14 @@ to avoid overwhelming the LSP server."
 
 ;;; Core Data Structures and Cache Management
 
+;; Forward declaration of the minor mode variable
+(defvar-local eglot-codelens-mode nil)
+
 (defvar-local eglot-codelens--cache nil
   "Cache for CodeLens objects grouped by line in current buffer.
 A hash table with line numbers as keys.
-Each value is a SORTED list of CODELENS-OVERLAY-CELL where CODELENS-OVERLAY-CELL is (CODELENS . OVERLAY).")
+Each value is a SORTED list of CODELENS-OVERLAY-CELL where
+CODELENS-OVERLAY-CELL is (CODELENS . OVERLAY).")
 
 (defvar-local eglot-codelens--prev-line-count nil
   "Previous document line count for calculating offset during line changes.
@@ -118,7 +122,8 @@ This is used to track which lines need processing during partial updates.")
 
 (defvar-local eglot-codelens--resolve-queue nil
   "Queue of pending CodeLens resolve requests.
-Each element is (DOCVER . CODELENS-CELL) where CODELENS-CELL is (CODELENS . OVERLAY).
+Each element is (DOCVER . CODELENS-CELL) where CODELENS-CELL is
+\(CODELENS . OVERLAY).
 This is used to batch resolve requests with debouncing.")
 
 (defvar-local eglot-codelens--resolve-timer nil
@@ -153,7 +158,8 @@ version value from Eglot's internal state."
 (defun eglot-codelens--build-cache (codelens-list)
   "Build cache from CODELENS-LIST.
 Returns a hash table with line numbers as keys.
-Each value is a sorted list of CODELENS-OVERLAY-CELL where CODELENS-OVERLAY-CELL is (CODELENS . OVERLAY)."
+Each value is a sorted list of CODELENS-OVERLAY-CELL where
+CODELENS-OVERLAY-CELL is (CODELENS . OVERLAY)."
   (when (and codelens-list (vectorp codelens-list) (length> codelens-list 0))
     (let ((line-groups (make-hash-table :test 'eq)))
       ;; Group CodeLens by line number
@@ -173,6 +179,28 @@ Each value is a sorted list of CODELENS-OVERLAY-CELL where CODELENS-OVERLAY-CELL
       line-groups)))
 
 ;;; LSP Protocol Handlers
+
+(cl-defgeneric eglot-codelens-provide-codelens (server codelens)
+  "Generic method for providing CodeLens data with middleware support.
+
+SERVER is the Eglot server instance.
+CODELENS is the list/vector of CodeLens objects from the LSP server.
+
+This generic method is called after fetching CodeLens from the server but
+before building the cache.  Users can define methods for specific server
+types to filter, transform, or extend CodeLens data.
+
+Default method returns CODELENS unchanged.
+
+Example usage:
+  (cl-defmethod eglot-codelens-provide-codelens
+    ((server eglot-lsp-server) codelens)
+    \"Filter out deprecated CodeLens.\"
+    (cl-remove-if (lambda (l)
+                    (let ((title (plist-get l :title)))
+                      (and title (string-search \"deprecated\" title))))
+                  codelens))"
+  (:method (_server codelens) codelens))
 
 (defun eglot-codelens--resolve-codelens (codelens-cell)
   "Resolve CODELENS-CELL and update its overlay.
@@ -215,7 +243,8 @@ If a timer is already running, does nothing (prevents duplicate scheduling)."
 
 (defun eglot-codelens--resolve-process-queue ()
   "Process one item from the resolve queue.
-Each item is (DOCVER . CODELENS-CELL) where CODELENS-CELL is (CODELENS . OVERLAY)."
+Each item is (DOCVER . CODELENS-CELL) where CODELENS-CELL is
+\(CODELENS . OVERLAY)."
   (when eglot-codelens--resolve-queue
     ;; Remove outdated items
     (setq eglot-codelens--resolve-queue
@@ -244,6 +273,9 @@ for later visible-area refreshes."
                        (when (and eglot-codelens-mode
                                   (eq docver (eglot-codelens--docver))
                                   (eq (window-buffer (selected-window)) buf))
+                         ;; Apply middleware hook for codelens transformation
+                         (setq codelens-list (eglot-codelens-provide-codelens server codelens-list))
+
                          ;; Save old cache before updating
                          (let ((old-cache eglot-codelens--cache)
                                (new-cache (eglot-codelens--build-cache codelens-list))
@@ -265,8 +297,9 @@ for later visible-area refreshes."
 ;;; UI Display System
 
 (defun eglot-codelens--build-display-string (codelens-cell line-start index total-codelens)
-  "Build display string for CODELENS-CELL at LINE-START with INDEX and TOTAL-CODELENS.
-CODELENS-CELL is a cons cell (CODELENS . OVERLAY)."
+  "Build display string for CODELENS-CELL.
+Arguments are LINE-START, INDEX, and TOTAL-CODELENS.
+CODELENS-CELL is a cons cell \(CODELENS . OVERLAY)."
   (let* ((is-first (= index 0))
          (is-last (= index (1- total-codelens)))
          (indentation (if is-first
@@ -289,8 +322,9 @@ CODELENS-CELL is a cons cell (CODELENS . OVERLAY)."
      separator)))
 
 (defun eglot-codelens--make-overlay (line-start codelens-cell index total-codelens docver)
-  "Create overlay for CODELENS-CELL at LINE-START with INDEX and TOTAL-CODELENS count.
-CODELENS-CELL is a cons cell (CODELENS . OVERLAY).
+  "Create overlay for CODELENS-CELL at LINE-START.
+INDEX and TOTAL-CODELENS specify the position and count.
+CODELENS-CELL is a cons cell \(CODELENS . OVERLAY).
 DOCVER is the document version for tracking overlay validity.
 Returns the created overlay."
   (let* ((ov (make-overlay line-start line-start)))
@@ -426,8 +460,8 @@ Arguments:
                   containing the CodeLens data to render.
   DOCVER        - Document version for tracking overlay validity.
   PENDING-LINES - List of line numbers to process.
-  FILE-CHANGED-P - Non-nil if the file content has changed, triggering full
-                  cleanup and delta calculation for line adjustments.
+  FILE-CHANGED-P - Non-nil if the file content has changed, triggering
+                  full cleanup and delta calculation for line adjustments.
 
 Optional arguments:
   OLD-CACHE     - Previous cache for overlay reuse.  When provided, existing
@@ -439,7 +473,8 @@ Optional arguments:
 
 Overlay Reuse Algorithm:
   1. For lines before the cursor: use direct line lookup in OLD-CACHE.
-  2. For lines at/after the cursor: adjust lookup by LINE-DELTA (insertions/deletions).
+  2. For lines at/after the cursor: adjust lookup by LINE-DELTA
+     (insertions/deletions).
   3. Overlays are matched by index position within each line.
   4. Outside RANGE: overlays are reused without updating display content.
   5. When FILE-CHANGED-P: clean up overlays not referenced in NEW-CACHE.
@@ -565,7 +600,8 @@ without a :command property, adding them to `eglot-codelens--resolve-queue'."
 ;;; Interaction Handling
 (defun eglot-codelens-execute (codelens-cell)
   "Execute CodeLens command from CODELENS-CELL.
-If the command is already available (from codelens or overlay), execute it directly.
+If the command is already available (from codelens or overlay), execute it
+directly.
 If the command needs resolving, trigger the resolve process.
 CODELENS-CELL is a cons cell (CODELENS . OVERLAY)."
   (let* ((codelens (car codelens-cell))
@@ -625,14 +661,14 @@ If there are multiple, show a selection menu for user to choose."
 (defun eglot-codelens--change-begin-line ()
   "Get the beginning line number of recent buffer changes.
 
-Analyzes `eglot-codelens--recent-changes' (collected from Eglot's change tracking)
-to find the first line affected by edits.  Returns the minimum line number from
-all change ranges, or 1 if there are no recent changes or if the change tracking
-was interrupted by Emacs messup.
+Analyzes `eglot-codelens--recent-changes' (collected from Eglot's change
+tracking) to find the first line affected by edits.  Returns the minimum line
+number from all change ranges, or 1 if there are no recent changes or if the
+change tracking was interrupted by Emacs messup.
 
 This is used in overlay reuse to determine where line adjustments are needed:
-overlays before this line use direct lookup, while overlays at or after this line
-need delta adjustment."
+overlays before this line use direct lookup, while overlays at or after this
+line need delta adjustment."
   (if (and eglot-codelens--recent-changes
            (not (eq :emacs-messup eglot-codelens--recent-changes)))
       (let ((beg-line most-positive-fixnum))
@@ -685,7 +721,8 @@ need delta adjustment."
              (current-buffer))))))
 
 (defun eglot-codelens--visible-range (&optional extend-lines)
-  "Calculate the visible line range for current buffer's window, with optional extension.
+  "Calculate the visible line range for the current buffer's window.
+Optional EXTEND-LINES extends the range by that many lines in both directions.
 
 EXTEND-LINES, when a positive integer, extends the range by that many
 lines in both directions (useful for pre-fetching).
