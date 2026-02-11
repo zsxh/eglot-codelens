@@ -1979,7 +1979,7 @@
                  (lambda (fmt &rest args)
                    (setq message-output (apply #'format fmt args)))))
         ;; Call the function being tested
-        (eglot-codelens-execute-at-line)
+        (eglot-codelens-execute-at-line line)
         ;; Verify message was shown
         (should message-output)
         (should (string-match-p "No CodeLens found at line 1" message-output))))))
@@ -1991,7 +1991,8 @@
     (insert "line1\nline2\nline3")
     (goto-char (point-min))
     (let* ((cache (make-hash-table :test 'eq))
-           (message-output nil))
+           (message-output nil)
+           (line 1))
       ;; Set up cache (hash table, but no CodeLens on line 1)
       (setq eglot-codelens--cache cache)
       ;; Mock message to capture output
@@ -1999,7 +2000,7 @@
                  (lambda (fmt &rest args)
                    (setq message-output (apply #'format fmt args)))))
         ;; Call the function being tested
-        (eglot-codelens-execute-at-line)
+        (eglot-codelens-execute-at-line line)
         ;; Verify message was shown
         (should message-output)
         (should (string-match-p "No CodeLens found at line 1" message-output))))))
@@ -2016,7 +2017,8 @@
                            :command (list :title "Run Tests" :arguments [])))
            (cell (cons codelens nil))
            (execute-called nil)
-           (execute-cell nil))
+           (execute-cell nil)
+           (line 1))
       ;; Set up cache with single CodeLens on line 1
       (puthash 1 (list cell) cache)
       (setq eglot-codelens--cache cache)
@@ -2026,7 +2028,7 @@
                    (setq execute-called t)
                    (setq execute-cell codelens-cell))))
         ;; Call the function being tested
-        (eglot-codelens-execute-at-line)
+        (eglot-codelens-execute-at-line line)
         ;; Verify eglot-codelens-execute was called with the correct cell
         (should execute-called)
         (should (eq execute-cell cell))))))
@@ -2048,7 +2050,8 @@
            (cell2 (cons codelens2 nil))
            (execute-called nil)
            (execute-cell nil)
-           (completing-read-called nil))
+           (completing-read-called nil)
+           (line 1))
       ;; Set up cache with two CodeLenses on line 1
       (puthash 1 (list cell1 cell2) cache)
       (setq eglot-codelens--cache cache)
@@ -2068,7 +2071,7 @@
                     (let ((cmd (plist-get (car cell) :command)))
                       (plist-get cmd :title)))))
         ;; Call the function being tested
-        (eglot-codelens-execute-at-line)
+        (eglot-codelens-execute-at-line line)
         ;; Verify completing-read was called (selection menu shown)
         (should completing-read-called)
         ;; Verify eglot-codelens-execute was called with cell1 (first option)
@@ -2090,7 +2093,8 @@
                             :command (list :title "Debug Tests" :arguments [])))
            (cell1 (cons codelens1 nil))
            (cell2 (cons codelens2 nil))
-           (execute-called nil))
+           (execute-called nil)
+           (line 1))
       ;; Set up cache with two CodeLenses on line 1
       (puthash 1 (list cell1 cell2) cache)
       (setq eglot-codelens--cache cache)
@@ -2108,7 +2112,7 @@
                     (let ((cmd (plist-get (car cell) :command)))
                       (plist-get cmd :title)))))
         ;; Call the function being tested
-        (eglot-codelens-execute-at-line)
+        (eglot-codelens-execute-at-line line)
         ;; Verify eglot-codelens-execute was NOT called
         (should-not execute-called)))))
 

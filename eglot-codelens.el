@@ -624,14 +624,16 @@ CODELENS-CELL is a cons cell (CODELENS . OVERLAY)."
       (message "CodeLens command not available")))))
 
 ;;;###autoload
-(defun eglot-codelens-execute-at-line ()
-  "Execute CodeLens at current line.
-If there's only one CodeLens, execute it directly.
+(defun eglot-codelens-execute-at-line (line)
+  "Execute CodeLens at LINE.
+
+When called interactively, LINE is the current line.
+When called from Elisp, LINE must be provided.
+
+If there's only one CodeLens at the line, execute it directly.
 If there are multiple, show a selection menu for user to choose."
-  (interactive)
-  (let* ((line (line-number-at-pos (point) t))
-         ;; Get line group from cache (hashtable lookup)
-         (sorted-codelens (gethash line eglot-codelens--cache)))
+  (interactive (list (line-number-at-pos (point) t)))
+  (let* ((sorted-codelens (gethash line eglot-codelens--cache)))
     (if sorted-codelens
         (if (= (length sorted-codelens) 1)
             ;; Only one CodeLens, execute it directly from cache
@@ -641,11 +643,14 @@ If there are multiple, show a selection menu for user to choose."
                                    for index from 0
                                    collect (cons
                                             (format "[%d] %s" index
-                                                    (eglot-codelens--format-text codelens-cell))
+                                                    (eglot-codelens--format-text
+                                                     codelens-cell))
                                             codelens-cell)))
                  (vertico-sort-function nil) ;; No sorting if using vertico
                  (selected-cell (cdr (assoc
-                                      (completing-read (format "CodeLens (L%d): " line) choices)
+                                      (completing-read
+                                       (format "CodeLens (L%d): " line)
+                                       choices)
                                       choices))))
             (when selected-cell
               (eglot-codelens-execute selected-cell))))
