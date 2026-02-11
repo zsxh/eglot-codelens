@@ -2116,8 +2116,8 @@
         ;; Verify eglot-codelens-execute was NOT called
         (should-not execute-called)))))
 
-(ert-deftest eglot-codelens-execute-nearest-above-current-line-has-codelens-test ()
-  "Test `eglot-codelens-execute-nearest-above' when current line has CodeLens."
+(ert-deftest eglot-codelens-execute-dwim-current-line-has-codelens-test ()
+  "Test `eglot-codelens-execute-dwim' when current line has CodeLens."
   (with-temp-buffer
     (insert "line1\nline2\nline3")
     (goto-char (point-min))
@@ -2138,13 +2138,13 @@
                    (setq execute-called t)
                    (setq execute-line line))))
         ;; Call the function being tested
-        (eglot-codelens-execute-nearest-above)
+        (eglot-codelens-execute-dwim)
         ;; Verify eglot-codelens-execute-at-line was called with current line
         (should execute-called)
         (should (= execute-line 2))))))
 
-(ert-deftest eglot-codelens-execute-nearest-above-codelens-above-test ()
-  "Test `eglot-codelens-execute-nearest-above' when CodeLens is above current line."
+(ert-deftest eglot-codelens-execute-dwim-codelens-above-test ()
+  "Test `eglot-codelens-execute-dwim' when CodeLens is above current line."
   (with-temp-buffer
     (insert "line1\nline2\nline3\nline4\nline5")
     (goto-char (point-min))
@@ -2170,13 +2170,13 @@
                    (setq execute-called t)
                    (setq execute-line line))))
         ;; Call the function being tested
-        (eglot-codelens-execute-nearest-above)
+        (eglot-codelens-execute-dwim)
         ;; Verify eglot-codelens-execute-at-line was called with nearest line (3)
         (should execute-called)
         (should (= execute-line 3))))))
 
-(ert-deftest eglot-codelens-execute-nearest-above-no-codelens-test ()
-  "Test `eglot-codelens-execute-nearest-above' when no CodeLens found."
+(ert-deftest eglot-codelens-execute-dwim-no-codelens-test ()
+  "Test `eglot-codelens-execute-dwim' when no CodeLens found."
   (with-temp-buffer
     (insert "line1\nline2\nline3")
     (goto-char (point-min))
@@ -2190,7 +2190,7 @@
                  (lambda (fmt &rest args)
                    (setq message-output (apply #'format fmt args)))))
         ;; Call the function being tested
-        (eglot-codelens-execute-nearest-above)
+        (eglot-codelens-execute-dwim)
         ;; Verify message was shown
         (should message-output)
         (should (string-match-p "No CodeLens found before line 3" message-output))))))

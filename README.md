@@ -62,10 +62,10 @@ Or toggle it manually with `M-x eglot-codelens-mode`.
 
 ### Interactive Commands
 
-| Command                                | Description                                         |
-|----------------------------------------|-----------------------------------------------------|
-| `eglot-codelens-execute-at-line`       | Execute CodeLens at current line                    |
-| `eglot-codelens-execute-nearest-above` | Execute CodeLens at nearest line above current line |
+| Command                          | Description                                         |
+|----------------------------------|-----------------------------------------------------|
+| `eglot-codelens-execute-at-line` | Execute CodeLens at current line                    |
+| `eglot-codelens-execute-dwim`    | Execute CodeLens at or above current line (DWIM)    |
 
 ### Customization
 

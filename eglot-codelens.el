@@ -42,10 +42,10 @@
 ;;
 ;; Interactive Commands:
 ;;
-;; | Command                                | Description                                  |
-;; |----------------------------------------|----------------------------------------------|
-;; | `eglot-codelens-execute-at-line'       | Execute CodeLens at the current line         |
-;; | `eglot-codelens-execute-nearest-above' | Execute CodeLens at nearest line above cursor|
+;; | Command                          | Description                                  |
+;; |----------------------------------|----------------------------------------------|
+;; | `eglot-codelens-execute-at-line' | Execute CodeLens at the current line         |
+;; | `eglot-codelens-execute-dwim'    | Execute CodeLens at or above cursor (DWIM)   |
 ;;
 ;; NOTE: This extension relies on some eglot--internal symbols
 ;; (eglot--docver, eglot--TextDocumentIdentifier, etc).
@@ -849,13 +849,12 @@ If there are multiple, show a selection menu for user to choose."
       (message (format "No CodeLens found at line %d." line)))))
 
 ;;;###autoload
-(defun eglot-codelens-execute-nearest-above ()
-  "Execute CodeLens at the nearest line above the current line.
+(defun eglot-codelens-execute-dwim ()
+  "Do-What-I-Mean: Execute CodeLens at or above the current line.
 
-Scans backwards from the current line to find the first line that has CodeLens.
-If found, executes `eglot-codelens-execute-at-line' at that line.
-If no CodeLens is found before reaching the beginning of the file,
-shows a message."
+If the current line has CodeLens, execute it.
+Otherwise, scan backwards to find the nearest line with CodeLens and execute it.
+If no CodeLens is found, show a message."
   (interactive)
   (let ((current-line (line-number-at-pos (point) t)))
     (cl-loop for line from current-line downto 1
