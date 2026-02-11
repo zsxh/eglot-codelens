@@ -632,12 +632,12 @@ CODELENS-CELL is a cons cell (CODELENS . OVERLAY)."
 ;;; Eglot Integration
 
 (defun eglot-codelens--collect-recent-changes (_beg _end _pre-change-length)
-  "Collect recent changes."
+  "Collect the recent modifications tracked by Eglot."
   (when eglot-codelens-mode
     (setq eglot-codelens--recent-changes eglot--recent-changes)))
 
 (defun eglot-codelens--change-begin-line ()
-  "Get the beginning line number of recent buffer changes.
+  "Return the beginning line number of recent buffer edits.
 
 Analyzes `eglot-codelens--recent-changes' (collected from Eglot's change
 tracking) to find the first line affected by edits.  Returns the minimum line
@@ -679,7 +679,7 @@ line need delta adjustment."
              (current-buffer))))))
 
 (defun eglot-codelens--on-document-change (&rest _args)
-  "Handle document changes via Eglot's document-changed hook."
+  "Handle document modification via Eglot's document-changed hook."
   (when eglot-codelens-mode
     ;; If there's already a timer, just reset its time instead of canceling and recreating
     (if (timerp eglot-codelens--update-timer)
