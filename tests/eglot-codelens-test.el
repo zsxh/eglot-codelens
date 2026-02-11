@@ -2116,6 +2116,85 @@
         ;; Verify eglot-codelens-execute was NOT called
         (should-not execute-called)))))
 
+(ert-deftest eglot-codelens-execute-nearest-above-current-line-has-codelens-test ()
+  "Test `eglot-codelens-execute-nearest-above' when current line has CodeLens."
+  (with-temp-buffer
+    (insert "line1\nline2\nline3")
+    (goto-char (point-min))
+    (forward-line 1)  ; Move to line 2
+    (let* ((cache (make-hash-table :test 'eq))
+           (codelens (list :range (list :start (list :line 1 :character 0)
+                                        :end (list :line 1 :character 5))
+                           :command (list :title "Run Tests" :arguments [])))
+           (cell (cons codelens nil))
+           (execute-called nil)
+           (execute-line nil))
+      ;; Set up cache with CodeLens on line 2
+      (puthash 2 (list cell) cache)
+      (setq eglot-codelens--cache cache)
+      ;; Mock eglot-codelens-execute-at-line to capture the line number
+      (cl-letf (((symbol-function 'eglot-codelens-execute-at-line)
+                 (lambda (line)
+                   (setq execute-called t)
+                   (setq execute-line line))))
+        ;; Call the function being tested
+        (eglot-codelens-execute-nearest-above)
+        ;; Verify eglot-codelens-execute-at-line was called with current line
+        (should execute-called)
+        (should (= execute-line 2))))))
+
+(ert-deftest eglot-codelens-execute-nearest-above-codelens-above-test ()
+  "Test `eglot-codelens-execute-nearest-above' when CodeLens is above current line."
+  (with-temp-buffer
+    (insert "line1\nline2\nline3\nline4\nline5")
+    (goto-char (point-min))
+    (forward-line 4) ; Move to line 5
+    (let* ((cache (make-hash-table :test 'eq))
+           (codelens1 (list :range (list :start (list :line 0 :character 0)
+                                         :end (list :line 0 :character 5))
+                            :command (list :title "Run Tests" :arguments [])))
+           (codelens2 (list :range (list :start (list :line 2 :character 0)
+                                         :end (list :line 2 :character 5))
+                            :command (list :title "Debug Tests" :arguments [])))
+           (cell1 (cons codelens1 nil))
+           (cell2 (cons codelens2 nil))
+           (execute-called nil)
+           (execute-line nil))
+      ;; Set up cache with CodeLenses on lines 1 and 3
+      (puthash 1 (list cell1) cache)
+      (puthash 3 (list cell2) cache)
+      (setq eglot-codelens--cache cache)
+      ;; Mock eglot-codelens-execute-at-line to capture the line number
+      (cl-letf (((symbol-function 'eglot-codelens-execute-at-line)
+                 (lambda (line)
+                   (setq execute-called t)
+                   (setq execute-line line))))
+        ;; Call the function being tested
+        (eglot-codelens-execute-nearest-above)
+        ;; Verify eglot-codelens-execute-at-line was called with nearest line (3)
+        (should execute-called)
+        (should (= execute-line 3))))))
+
+(ert-deftest eglot-codelens-execute-nearest-above-no-codelens-test ()
+  "Test `eglot-codelens-execute-nearest-above' when no CodeLens found."
+  (with-temp-buffer
+    (insert "line1\nline2\nline3")
+    (goto-char (point-min))
+    (forward-line 2)  ; Move to line 3
+    (let* ((cache (make-hash-table :test 'eq))
+           (message-output nil))
+      ;; Set up empty cache
+      (setq eglot-codelens--cache cache)
+      ;; Mock message to capture output
+      (cl-letf (((symbol-function 'message)
+                 (lambda (fmt &rest args)
+                   (setq message-output (apply #'format fmt args)))))
+        ;; Call the function being tested
+        (eglot-codelens-execute-nearest-above)
+        ;; Verify message was shown
+        (should message-output)
+        (should (string-match-p "No CodeLens found before line 3" message-output))))))
+
 (ert-deftest eglot-codelens--change-begin-line-test ()
   "Test `eglot-codelens--change-begin-line' with various inputs."
   ;; Test case collection: (name recent-changes expected-line)

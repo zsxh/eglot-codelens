@@ -50,17 +50,22 @@ Download `eglot-codelens.el` and add it to your `load-path` or install it via `p
 
 ## Usage
 
-The package automatically enables CodeLens when Eglot connects to a server that supports it.
+### Enabling the Mode
 
-### Manual Control
+You can enable `eglot-codelens-mode` automatically via hook:
 
 ```elisp
-;; Enable in current buffer
-M-x eglot-codelens-mode
-
-;; Execute CodeLens at current line
-M-x eglot-codelens-execute-at-line
+(add-hook 'eglot-managed-mode-hook #'eglot-codelens-mode)
 ```
+
+Or toggle it manually with `M-x eglot-codelens-mode`.
+
+### Interactive Commands
+
+| Command                                | Description                                         |
+|----------------------------------------|-----------------------------------------------------|
+| `eglot-codelens-execute-at-line`       | Execute CodeLens at current line                    |
+| `eglot-codelens-execute-nearest-above` | Execute CodeLens at nearest line above current line |
 
 ### Customization
 
