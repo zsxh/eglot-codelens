@@ -56,6 +56,7 @@
 (require 'cl-lib)
 (require 'compat)
 (require 'eglot)
+(require 'pulse)
 
 (require 'nerd-icons nil t)
 
@@ -817,7 +818,7 @@ without re-fetching CodeLens from the server."
 
 ;;;###autoload
 (defun eglot-codelens-execute-at-line (line)
-  "Execute CodeLens at LINE.
+  "Execute CodeLens at LINE with a visual flash effect on the line.
 
 When called interactively, LINE is the current line.
 When called from Elisp, LINE must be provided.
@@ -827,25 +828,32 @@ If there are multiple, show a selection menu for user to choose."
   (interactive (list (line-number-at-pos (point) t)))
   (let* ((sorted-codelens (gethash line eglot-codelens--cache)))
     (if sorted-codelens
-        (if (= (length sorted-codelens) 1)
-            ;; Only one CodeLens, execute it directly from cache
-            (eglot-codelens-execute (car sorted-codelens))
-          ;; Multiple CodeLens, show selection menu using cached sorted list
-          (let* ((choices (cl-loop for codelens-cell in sorted-codelens
-                                   for index from 0
-                                   collect (cons
-                                            (format "[%d] %s" index
-                                                    (eglot-codelens--format-text
-                                                     codelens-cell))
-                                            codelens-cell)))
-                 (vertico-sort-function nil) ;; No sorting if using vertico
-                 (selected-cell (cdr (assoc
-                                      (completing-read
-                                       (format "CodeLens (L%d): " line)
-                                       choices)
-                                      choices))))
-            (when selected-cell
-              (eglot-codelens-execute selected-cell))))
+        (progn
+          ;; Flash the line to indicate execution
+          (save-excursion
+            (goto-char (point-min))
+            (forward-line (1- line))
+            (pulse-momentary-highlight-one-line (point)))
+          (if (= (length sorted-codelens) 1)
+              ;; Only one CodeLens, execute it directly from cache
+              (eglot-codelens-execute (car sorted-codelens))
+            ;; Multiple CodeLens, show selection menu using cached sorted list
+            (let* ((choices (cl-loop for codelens-cell in sorted-codelens
+                                     for index from 0
+                                     collect (cons
+                                              (format
+                                               "[%d] %s" index
+                                               (eglot-codelens--format-text
+                                                codelens-cell))
+                                              codelens-cell)))
+                   (vertico-sort-function nil) ;; No sorting if using vertico
+                   (selected-cell (cdr (assoc
+                                        (completing-read
+                                         (format "CodeLens (L%d): " line)
+                                         choices)
+                                        choices))))
+              (when selected-cell
+                (eglot-codelens-execute selected-cell)))))
       (message (format "No CodeLens found at line %d." line)))))
 
 ;;;###autoload
