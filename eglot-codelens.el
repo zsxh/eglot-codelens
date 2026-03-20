@@ -188,11 +188,12 @@ CODELENS-OVERLAY-CELL is (CODELENS . OVERLAY)."
 
 ;;; LSP Protocol Handlers
 
-(cl-defgeneric eglot-codelens-provide-codelens (server codelens)
+(cl-defgeneric eglot-codelens-provide-codelens (server codelens uri)
   "Generic method for providing CodeLens data with middleware support.
 
 SERVER is the Eglot server instance.
 CODELENS is the list/vector of CodeLens objects from the LSP server.
+URI is the document URI string.
 
 This generic method is called after fetching CodeLens from the server but
 before building the cache.  Users can define methods for specific server
@@ -202,13 +203,13 @@ Default method returns CODELENS unchanged.
 
 Example usage:
   (cl-defmethod eglot-codelens-provide-codelens
-    ((server eglot-lsp-server) codelens)
+    ((server eglot-lsp-server) codelens uri)
     \"Filter out deprecated CodeLens.\"
     (cl-remove-if (lambda (l)
                     (let ((title (plist-get l :title)))
                       (and title (string-search \"deprecated\" title))))
                   codelens))"
-  (:method (_server codelens) codelens))
+  (:method (_server codelens _uri) codelens))
 
 (defun eglot-codelens--resolve-codelens (codelens-cell)
   "Resolve CODELENS-CELL and update its overlay.
@@ -275,31 +276,34 @@ for later visible-area refreshes."
     (jsonrpc-async-request
      server
      :textDocument/codeLens (list :textDocument (eglot--TextDocumentIdentifier))
-     :success-fn (lambda (codelens-list)
-                   (when (buffer-live-p buf)
-                     (with-current-buffer buf
-                       (when (and eglot-codelens-mode
-                                  (eq docver (eglot-codelens--docver))
-                                  (eq (window-buffer (selected-window)) buf))
-                         ;; Apply middleware hook for codelens transformation
-                         (setq codelens-list (eglot-codelens-provide-codelens server codelens-list))
+     :success-fn
+      (lambda (codelens-list)
+        (when (buffer-live-p buf)
+          (with-current-buffer buf
+            (when (and eglot-codelens-mode
+                       (eq docver (eglot-codelens--docver))
+                       (eq (window-buffer (selected-window)) buf))
+              ;; Apply middleware hook for codelens transformation
+              (let ((uri (plist-get (eglot--TextDocumentIdentifier) :uri)))
+                (setq codelens-list (eglot-codelens-provide-codelens
+                                     server codelens-list uri)))
 
-                         ;; Save old cache before updating
-                         (let ((old-cache eglot-codelens--cache)
-                               (new-cache (eglot-codelens--build-cache codelens-list))
-                               (range (eglot-codelens--visible-range))
-                               all-lines)
+              ;; Save old cache before updating
+              (let ((old-cache eglot-codelens--cache)
+                    (new-cache (eglot-codelens--build-cache codelens-list))
+                    (range (eglot-codelens--visible-range))
+                    all-lines)
 
-                           (when new-cache
-                             (maphash (lambda (line _) (push line all-lines)) new-cache))
+                (when new-cache
+                  (maphash (lambda (line _) (push line all-lines)) new-cache))
 
-                           ;; Initialize pending-lines with all lines from new cache
-                           (setq eglot-codelens--cache new-cache
-                                 eglot-codelens--version docver
-                                 eglot-codelens--pending-lines all-lines)
+                ;; Initialize pending-lines with all lines from new cache
+                (setq eglot-codelens--cache new-cache
+                      eglot-codelens--version docver
+                      eglot-codelens--pending-lines all-lines)
 
-                           (eglot-codelens--render-codelens
-                            new-cache docver all-lines t old-cache range))))))
+                (eglot-codelens--render-codelens
+                 new-cache docver all-lines t old-cache range))))))
      :deferred :textDocument/codeLens)))
 
 ;;; UI Display System
